@@ -38,61 +38,77 @@ let worker: IngestWorker;
 let stopped = false;
 let exit: ReturnType<typeof vi.spyOn>;
 
+/** Teardown steps must each run even when an earlier one (or the setup) failed. */
+const quietly = (step?: Promise<unknown>) => step?.catch(() => undefined);
+
+async function cleanup() {
+  if (!stopped) await quietly(worker?.onApplicationShutdown()); // drains, then closes its own broker connection and pool
+  await quietly(workerRabbit?.close()); // also covers a worker that never got as far as bootstrap
+  await quietly(workerDb?.pool.end()); // rejects once the worker has ended it: fine
+  await quietly(publisher?.close());
+  await quietly(mq?.stop());
+  await quietly(t?.stop());
+  if (storageDir) await rm(storageDir, { recursive: true, force: true });
+  exit?.mockRestore();
+}
+
 beforeAll(async () => {
-  Logger.overrideLogger(false); // the worker's own logs would only add noise here
-  // IngestWorker's onFatal calls process.exit(1) in production; here it must not kill the test run.
-  exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+  try {
+    Logger.overrideLogger(false); // the worker's own logs would only add noise here
+    // IngestWorker's onFatal calls process.exit(1) in production; here it must not kill the test run.
+    exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
 
-  [t, mq, storageDir] = await Promise.all([
-    startTestDb(),
-    new RabbitMQContainer('rabbitmq:3.13-management').start(),
-    mkdtemp(join(tmpdir(), 'clausecite-storage-')),
-  ]);
+    // Keep whatever did start, so a failure in one of them still lets cleanup() stop the others.
+    const started = await Promise.allSettled([
+      startTestDb().then((v) => (t = v)),
+      new RabbitMQContainer('rabbitmq:3.13-management').start().then((v) => (mq = v)),
+      mkdtemp(join(tmpdir(), 'clausecite-storage-')).then((v) => (storageDir = v)),
+    ]);
+    for (const r of started) if (r.status === 'rejected') throw r.reason;
 
-  // The same env the worker module builds in production. The OpenRouter key is fake and its URL
-  // unroutable: the worker must use the injected mock model, never reach for the real provider.
-  const source = {
-    DATABASE_URL: t.url,
-    OPENROUTER_API_KEY: 'test-key-never-used',
-    OPENROUTER_BASE_URL: 'http://127.0.0.1:1',
-    RABBITMQ_URL: mq.getAmqpUrl(),
-    INGEST_RETRY_DELAYS_MS: '100,200',
-    STORAGE_DIR: storageDir,
-  };
-  const env: WorkerEnv = {
-    ...loadEnv(dbEnv, source),
-    ...loadEnv(llmEnv, source),
-    ...loadEnv(rabbitEnv, source),
-    ...loadEnv(storageEnv, source),
-  };
+    // The same env the worker module builds in production. The OpenRouter key is fake and its URL
+    // unroutable: the worker must use the injected mock model, never reach for the real provider.
+    const source = {
+      DATABASE_URL: t.url,
+      OPENROUTER_API_KEY: 'test-key-never-used',
+      OPENROUTER_BASE_URL: 'http://127.0.0.1:1',
+      RABBITMQ_URL: mq.getAmqpUrl(),
+      INGEST_RETRY_DELAYS_MS: '100,200',
+      STORAGE_DIR: storageDir,
+    };
+    const env: WorkerEnv = {
+      ...loadEnv(dbEnv, source),
+      ...loadEnv(llmEnv, source),
+      ...loadEnv(rabbitEnv, source),
+      ...loadEnv(storageEnv, source),
+    };
 
-  // The worker gets its own pool and broker connection (it closes them on shutdown);
-  // the test keeps t.db and a separate publisher connection for setup and assertions.
-  workerDb = createDb(env.DATABASE_URL, 2);
-  workerRabbit = await connectRabbit(env.RABBITMQ_URL, {
-    retryDelaysMs: env.INGEST_RETRY_DELAYS_MS,
-  });
-  publisher = await connectRabbit(env.RABBITMQ_URL, { retryDelaysMs: env.INGEST_RETRY_DELAYS_MS });
+    // The worker gets its own pool and broker connection (it closes them on shutdown);
+    // the test keeps t.db and a separate publisher connection for setup and assertions.
+    workerDb = createDb(env.DATABASE_URL, 2);
+    workerRabbit = await connectRabbit(env.RABBITMQ_URL, {
+      retryDelaysMs: env.INGEST_RETRY_DELAYS_MS,
+    });
+    publisher = await connectRabbit(env.RABBITMQ_URL, {
+      retryDelaysMs: env.INGEST_RETRY_DELAYS_MS,
+    });
 
-  worker = new IngestWorker(env, workerDb, workerRabbit, {
-    embedding: mockEmbeddingModel(),
-    ids: { embedding: 'mock-embedding' },
-  });
-  await worker.onApplicationBootstrap();
+    worker = new IngestWorker(env, workerDb, workerRabbit, {
+      embedding: mockEmbeddingModel(),
+      ids: { embedding: 'mock-embedding' },
+    });
+    await worker.onApplicationBootstrap();
+  } catch (err) {
+    await cleanup(); // vitest may not run afterAll for a failed beforeAll; this is idempotent
+    throw err;
+  }
 });
 
 afterEach(() => {
   expect(exit).not.toHaveBeenCalled(); // the worker never hit its crash-only path
 });
 
-afterAll(async () => {
-  if (!stopped) await worker?.onApplicationShutdown().catch(() => undefined);
-  await publisher?.close();
-  await mq?.stop();
-  await t?.stop();
-  if (storageDir) await rm(storageDir, { recursive: true, force: true });
-  exit?.mockRestore();
-});
+afterAll(cleanup);
 
 async function insertDoc(filePath: string, sha256: string = randomUUID()) {
   const [doc] = await t.db
@@ -145,10 +161,13 @@ describe('IngestWorker composition (real consumer, mock models, STORAGE_DIR)', (
     const row = await waitForStatus(doc.id, 'failed');
     expect(row.error).toMatch(/^FILE_NOT_FOUND/);
     expect(row.attempts).toBe(1); // not retryable: straight to the dead-letter queue
-    await vi.waitFor(async () => {
-      const dead = await publisher.channel.get(INGEST_DLQ, { noAck: true });
-      expect(dead && JSON.parse(dead.content.toString())).toMatchObject({ documentId: doc.id });
-    });
+    await vi.waitFor(
+      async () => {
+        const dead = await publisher.channel.get(INGEST_DLQ, { noAck: true });
+        expect(dead && JSON.parse(dead.content.toString())).toMatchObject({ documentId: doc.id });
+      },
+      { timeout: 5_000 }, // the dead letter is confirmed just after the row flips to 'failed'
+    );
   });
 
   it('onApplicationShutdown resolves cleanly and releases the pool and the broker', async () => {

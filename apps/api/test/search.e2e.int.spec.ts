@@ -91,6 +91,10 @@ describe('POST /search', () => {
   it('reports a cache miss on the first sighting of a query', async () => {
     const res = await search({ query: 'maternity benefit waiting' }).expect(200);
     expect(res.body.embeddingCacheHit).toBe(false);
+    // the query embedding runs under the 5 s timeout (spec §7): the SDK was handed a live signal
+    const signal = embedding.doEmbedCalls.at(-1)?.abortSignal;
+    expect(signal).toBeDefined();
+    expect(signal?.aborted).toBe(false);
   });
 
   it('requires authentication', async () => {

@@ -182,7 +182,7 @@ describe('createCachedQueryEmbedder', () => {
     const begin = Date.now();
     await expect(
       createCachedQueryEmbedder(model, 'm1', cache, { timeoutMs: 20 })('room rent'),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ name: 'TimeoutError' });
     expect(Date.now() - begin).toBeLessThan(150);
     await flush();
     expect(cache.store.size).toBe(0);

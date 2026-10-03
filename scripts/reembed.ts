@@ -1,58 +1,46 @@
 // Usage: pnpm reembed [--dry-run]
 // Re-enqueues every ready document embedded with a different model than EMBEDDING_MODEL (spec §3.5).
+// A document whose job cannot be published is put back to ready and the script exits non-zero.
 import {
-  and,
   connectRabbit,
   createDb,
   dbEnv,
-  documents,
-  eq,
   llmEnv,
   loadEnv,
   publishIngestJob,
   rabbitEnv,
-  sql,
+  reembedStale,
+  type RabbitConnection,
 } from '@clausecite/core';
 
 const dryRun = process.argv.includes('--dry-run');
 const { DATABASE_URL } = loadEnv(dbEnv);
-const { EMBEDDING_MODEL } = loadEnv(llmEnv);
+// Only the model name is needed here (no OPENROUTER_API_KEY): nothing is embedded by this script.
+const { EMBEDDING_MODEL } = loadEnv(llmEnv.pick({ EMBEDDING_MODEL: true }));
 const { db, pool } = createDb(DATABASE_URL, 2);
 
+// Opened on the first publish, so a dry run or an up-to-date database never touches the broker.
+let conn = undefined as RabbitConnection | undefined;
 try {
-  const stale = await db
-    .select({ id: documents.id, slug: documents.slug, embeddingModel: documents.embeddingModel })
-    .from(documents)
-    .where(
-      and(
-        eq(documents.status, 'ready'),
-        sql`${documents.embeddingModel} IS DISTINCT FROM ${EMBEDDING_MODEL}`,
-      ),
-    );
-
-  for (const d of stale)
-    console.log(`${d.slug}: ${d.embeddingModel ?? '(none)'} → ${EMBEDDING_MODEL}`);
-
-  if (!dryRun && stale.length > 0) {
-    const rabbit = loadEnv(rabbitEnv);
-    const conn = await connectRabbit(rabbit.RABBITMQ_URL, {
-      retryDelaysMs: rabbit.INGEST_RETRY_DELAYS_MS,
-    });
-    try {
-      for (const d of stale) {
-        await db
-          .update(documents)
-          .set({ status: 'queued', attempts: 0, error: null })
-          .where(eq(documents.id, d.id));
-        await publishIngestJob(conn.channel, d.id);
+  const count = await reembedStale({
+    db,
+    embeddingModel: EMBEDDING_MODEL,
+    dryRun,
+    log: console.log,
+    publish: async (documentId) => {
+      if (!conn) {
+        const rabbit = loadEnv(rabbitEnv);
+        conn = await connectRabbit(rabbit.RABBITMQ_URL, {
+          retryDelaysMs: rabbit.INGEST_RETRY_DELAYS_MS,
+        });
       }
-    } finally {
-      await conn.close();
-    }
-  }
+      await publishIngestJob(conn.channel, documentId);
+    },
+  });
   console.log(
-    `${dryRun ? 'would re-enqueue' : 're-enqueued'} ${stale.length} documents (model → ${EMBEDDING_MODEL})`,
+    `${dryRun ? 'would re-enqueue' : 're-enqueued'} ${count} documents (model → ${EMBEDDING_MODEL})`,
   );
 } finally {
+  await conn?.close();
   await pool.end();
 }

@@ -13,6 +13,7 @@ export * from './ingest/structure.js';
 export * from './ingest/tokens.js';
 export * from './ingest/chunker.js';
 export * from './ingest/ingest-document.js';
+export * from './ingest/reembed.js';
 export * from './queue/topology.js';
 export * from './queue/rabbit.js';
 export * from './retrieval/search.js';

@@ -58,7 +58,9 @@ describe('embedTexts', () => {
     it('aborts a slow embedding call once timeoutMs elapses', async () => {
       const model = mockEmbeddingModel(undefined, { delayMs: 200 });
       const begin = Date.now();
-      await expect(embedQuery(model, 'x', { timeoutMs: 20 })).rejects.toThrow();
+      await expect(embedQuery(model, 'x', { timeoutMs: 20 })).rejects.toMatchObject({
+        name: 'TimeoutError',
+      });
       expect(Date.now() - begin).toBeLessThan(150);
     });
 
