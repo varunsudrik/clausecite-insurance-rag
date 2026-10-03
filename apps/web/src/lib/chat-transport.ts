@@ -29,6 +29,8 @@ const bearer = (token: string) => `Bearer ${token}`;
 async function fetchWithRefresh(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const res = await fetch(input, init);
   if (res.status !== 401) return res;
+  // The rejected answer is discarded: free its connection instead of leaving the body unread.
+  await res.body?.cancel().catch(() => undefined);
   const rejected = new Headers(init?.headers).get('authorization');
   const current = loadSession();
   if (current && bearer(current.token) === rejected) clearSession();

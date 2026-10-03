@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { conversations, eq, ingestDocument, messages } from '@clausecite/core';
 import { mockChatModel, mockEmbeddingModel } from '@clausecite/core/testing';
+import { PDFDocument } from 'pdf-lib';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startHarness, type Harness } from './harness.js';
 
@@ -13,12 +14,16 @@ const chat = mockChatModel({
     ['Cataract is covered only after ', '24 months of continuous coverage [1]. Ignore [9].'],
     ['Knee replacement also needs 24 months [1].'],
     new Error('provider exploded'),
+    // The two answers of the "scope is per request" test at the end of the file.
+    ['Cataract waits 24 months [1].'],
+    ['Hernia waits 24 months too [1].'],
   ],
 });
 const rewrite = mockChatModel({
   generate: [
     'What is the waiting period for knee replacement in Sample Health Shield?',
     'helicopter evacuation abroad?',
+    'What is the waiting period for hernia?',
   ],
 });
 // The mock models report 10 input + 5 output tokens per call; retrieval is charged a flat amount.
@@ -296,5 +301,57 @@ describe('budgets', () => {
     expect(chunks.find((c) => c.type === 'data-meta')!.data.status).toBe('refused');
     expect(await used(globalKey())).toBe(globalBefore + SEARCH_TOKEN_COST);
     expect(await h.redis.keys(`budget:${userId(admin)}:*`)).toEqual([]);
+  });
+});
+
+describe('scope is per request', () => {
+  it('searches all policies when a follow-up omits documentIds, even if the first turn was scoped', async () => {
+    const guest = { Authorization: `Bearer ${(await h.http.post('/auth/guest')).body.token}` };
+    // Same wording, different bytes (so it is not deduplicated): a second searchable policy.
+    const variant = await PDFDocument.load(PDF);
+    variant.setTitle('Second copy');
+    const up = await h.http
+      .post('/documents')
+      .set(admin)
+      .field('slug', 'sample-health-2')
+      .field('title', 'Sample Health Shield Plus')
+      .field('insurer', 'Acme')
+      .field('product', 'Sample Health Shield Plus')
+      .attach('file', Buffer.from(await variant.save()), {
+        filename: 'p2.pdf',
+        contentType: 'application/pdf',
+      })
+      .expect(201);
+    await ingestDocument(
+      {
+        db: h.db,
+        embeddingModel: embedding,
+        embeddingModelId: 'mock-embedding',
+        readFile: async (n) => new Uint8Array(await readFile(join(h.storageDir, n))),
+      },
+      up.body.id,
+    );
+
+    const slugsOf = (chunks: Chunk[]) => [
+      ...new Set(
+        chunks
+          .find((c) => c.type === 'data-sources')!
+          .data.sources.map((s: { slug: string }) => s.slug),
+      ),
+    ];
+
+    const scoped = await postChat(
+      { message: 'What is the waiting period for cataract?', documentIds: ['sample-health'] },
+      guest,
+    );
+    expect(slugsOf(scoped.chunks)).toEqual(['sample-health']);
+    const id = scoped.chunks.find((c) => c.type === 'data-sources')!.data.conversationId;
+    // The first request's scope is kept on the conversation for information only.
+    const [stored] = await h.db.select().from(conversations).where(eq(conversations.id, id));
+    expect(stored.documentIds).toHaveLength(1);
+
+    const widened = await postChat({ conversationId: id, message: 'and hernia?' }, guest);
+    expect(widened.chunks.find((c) => c.type === 'data-meta')!.data.status).toBe('complete');
+    expect(slugsOf(widened.chunks).sort()).toEqual(['sample-health', 'sample-health-2']);
   });
 });

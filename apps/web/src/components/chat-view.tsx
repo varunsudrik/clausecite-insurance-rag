@@ -1,9 +1,9 @@
 'use client';
 import { useChat } from '@ai-sdk/react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch } from '@/lib/api';
 import { createChatTransport, type ChatRequestState } from '@/lib/chat-transport';
-import { describeChatError } from '@/lib/errors';
+import { describeChatError, isConversationGone } from '@/lib/errors';
 import { ensureSession } from '@/lib/session';
 import type { ClauseCiteUIMessage, PublicDocument, SourceRef } from '@/lib/types';
 import { AssistantMessage } from './assistant-message';
@@ -22,11 +22,21 @@ export function ChatView({ onSelectSource }: { onSelectSource?: (s: SourceRef) =
   // Read by the transport at send time, so the scope and conversation always reflect the latest UI state.
   const state = useRef<ChatRequestState>({});
   const inputRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  /** The last question sent, so a failed send can put it back in the input. */
+  const lastQuestion = useRef('');
+  // Latest parent callback, read at click time so `cite` keeps one identity (AssistantMessage is memoized).
+  const selectSource = useRef(onSelectSource);
+  useEffect(() => {
+    selectSource.current = onSelectSource;
+  }, [onSelectSource]);
 
   const transport = useMemo(() => createChatTransport(() => state.current), []);
   const { messages, sendMessage, status, error, stop, setMessages, clearError } =
     useChat<ClauseCiteUIMessage>({
       transport,
+      // Re-render at most every 50 ms while tokens stream in.
+      throttle: 50,
       onData: (part) => {
         if (part.type === 'data-sources') state.current.conversationId = part.data.conversationId;
       },
@@ -44,14 +54,35 @@ export function ChatView({ onSelectSource }: { onSelectSource?: (s: SourceRef) =
   }, []);
 
   const busy = status === 'submitted' || status === 'streaming';
-  // The disabled input drops focus while an answer is generated; hand it back when the turn ends.
+
+  // A turn that failed was not answered: undo it so the user can fix the cause and send it again.
+  useEffect(() => {
+    if (!error) return;
+    // The server forgot this conversation (e.g. the guest identity changed): start a fresh one next.
+    if (isConversationGone(error)) state.current.conversationId = undefined;
+    setInput((current) => current || lastQuestion.current);
+    // Rejected before any answer started: the question is back in the input, so drop its bubble.
+    setMessages((all) => (all.at(-1)?.role === 'user' ? all.slice(0, -1) : all));
+  }, [error, setMessages]);
+
+  // The disabled input drops focus while an answer is generated; hand it back when the turn ends,
+  // unless the user moved on to something else (a citation chip, the scope menu). The form's own
+  // Ask/Stop button counts as "still here": it is the same DOM node across the turn.
   const wasBusy = useRef(false);
   useEffect(() => {
-    if (wasBusy.current && !busy) inputRef.current?.focus();
+    if (wasBusy.current && !busy) {
+      const active = document.activeElement;
+      if (!active || active === document.body || formRef.current?.contains(active)) {
+        inputRef.current?.focus();
+      }
+    }
     wasBusy.current = busy;
   }, [busy]);
 
-  const cite = (s: SourceRef) => (onSelectSource ? onSelectSource(s) : setSelected(s));
+  const cite = useCallback((s: SourceRef) => {
+    if (selectSource.current) selectSource.current(s);
+    else setSelected(s);
+  }, []);
   const changeScope = (next: string[] | undefined) => {
     state.current.documentIds = next;
     setScope(next);
@@ -63,7 +94,8 @@ export function ChatView({ onSelectSource }: { onSelectSource?: (s: SourceRef) =
     state.current.conversationId = undefined;
     clearError();
   };
-  const searching = busy && !hasContent(messages.at(-1));
+  const last = messages.at(-1);
+  const searching = busy && !hasContent(last);
 
   return (
     <div className="flex flex-col gap-4">
@@ -98,7 +130,12 @@ export function ChatView({ onSelectSource }: { onSelectSource?: (s: SourceRef) =
               {m.parts.map((p) => (p.type === 'text' ? p.text : '')).join('')}
             </div>
           ) : (
-            <AssistantMessage key={m.id} message={m} onCite={cite} />
+            <AssistantMessage
+              key={m.id}
+              message={m}
+              onCite={cite}
+              streaming={busy && m.id === last?.id}
+            />
           ),
         )}
         {searching && (
@@ -118,12 +155,14 @@ export function ChatView({ onSelectSource }: { onSelectSource?: (s: SourceRef) =
       )}
 
       <form
+        ref={formRef}
         className="flex gap-2"
         onSubmit={(e) => {
           e.preventDefault();
           const text = input.trim();
           if (!text || busy) return;
           clearError();
+          lastQuestion.current = text;
           void sendMessage({ text });
           setInput('');
         }}

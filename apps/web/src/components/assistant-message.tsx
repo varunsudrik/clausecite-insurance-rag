@@ -1,5 +1,5 @@
 'use client';
-import { createContext, useContext, useMemo, type ComponentPropsWithoutRef } from 'react';
+import { createContext, memo, useContext, useMemo, type ComponentPropsWithoutRef } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { linkifyCitations } from '@/lib/citations';
@@ -20,9 +20,15 @@ function partsOf(message: ClauseCiteUIMessage) {
 
 type CiteContextValue = {
   bySourceN: ReadonlyMap<number, SourceRef>;
+  /** The citation numbers that may become chips: the server-validated ones once meta arrived. */
+  valid: ReadonlySet<number>;
   onCite: (s: SourceRef) => void;
 };
-const CiteContext = createContext<CiteContextValue>({ bySourceN: new Map(), onCite: () => {} });
+const CiteContext = createContext<CiteContextValue>({
+  bySourceN: new Map(),
+  valid: new Set(),
+  onCite: () => {},
+});
 
 /**
  * Defined once at module level: react-markdown remounts every element of a custom component whose
@@ -30,41 +36,64 @@ const CiteContext = createContext<CiteContextValue>({ bySourceN: new Map(), onCi
  * the click. The per-message data reaches it through context instead.
  */
 function MarkdownLink({ href, children }: ComponentPropsWithoutRef<'a'>) {
-  const { bySourceN, onCite } = useContext(CiteContext);
-  const m = /^#cite-(\d+)$/.exec(href ?? '');
-  const source = m ? bySourceN.get(Number(m[1])) : undefined;
-  if (m && source) return <CitationChip n={Number(m[1])} onClick={() => onCite(source)} />;
-  return (
-    <a href={href} target="_blank" rel="noreferrer noopener">
-      {children}
-    </a>
-  );
+  const { bySourceN, valid, onCite } = useContext(CiteContext);
+  const cite = /^#cite-(\d+)$/.exec(href ?? '');
+  if (cite) {
+    const n = Number(cite[1]);
+    const source = valid.has(n) ? bySourceN.get(n) : undefined;
+    // A forged or unvalidated marker (the model or a quoted clause can write one) stays plain text.
+    return source ? <CitationChip n={n} onClick={() => onCite(source)} /> : <>[{children}]</>;
+  }
+  // Only real web links become anchors; an unsafe URL was already blanked by react-markdown.
+  if (href && /^(https?:|mailto:)/i.test(href)) {
+    return (
+      <a href={href} target="_blank" rel="noreferrer noopener">
+        {children}
+      </a>
+    );
+  }
+  return <>{children}</>;
 }
 
 const MARKDOWN_COMPONENTS: Components = { a: MarkdownLink };
+// Images are never allowed: a remote URL in model output would be fetched by the browser as a beacon.
+const DISALLOWED = ['img'];
 
-export function AssistantMessage({
+const badge =
+  'rounded bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400';
+
+export const AssistantMessage = memo(function AssistantMessage({
   message,
   onCite,
+  streaming = false,
 }: {
   message: ClauseCiteUIMessage;
   onCite: (s: SourceRef) => void;
+  /** True while this message is still being generated; otherwise a missing meta means it was cut short. */
+  streaming?: boolean;
 }) {
   const { sources, meta, streamed } = partsOf(message);
   // The streamed deltas are raw; once the server's cleaned answer arrives it replaces them.
   const text = meta?.answer ?? streamed;
-  const valid = new Set(meta ? meta.citations.map((c) => c.n) : sources.map((s) => s.n));
-  const cite = useMemo(
-    () => ({ bySourceN: new Map(sources.map((s) => [s.n, s])), onCite }),
-    [sources, onCite],
+  const valid = useMemo(
+    () => new Set(meta ? meta.citations.map((c) => c.n) : sources.map((s) => s.n)),
+    [meta, sources],
   );
+  const cite = useMemo(
+    () => ({ bySourceN: new Map(sources.map((s) => [s.n, s])), valid, onCite }),
+    [sources, valid, onCite],
+  );
+
+  // A refusal is "<lead>\n\n<closest clauses list>\n\n<verify line>": the list is shown as buttons.
+  const paragraphs = text.split(/\n{2,}/);
+  const verifyLine = paragraphs.length > 1 ? paragraphs.at(-1) : undefined;
 
   return (
     <div className="space-y-2">
       {meta?.status === 'refused' ? (
         <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/40">
           <p className="font-medium">Not found in the selected policies</p>
-          <p className="mt-1 text-zinc-600 dark:text-zinc-400">{text.split('\n')[0]}</p>
+          <p className="mt-1 text-zinc-600 dark:text-zinc-400">{paragraphs[0]}</p>
           {meta.suggestions.length > 0 && (
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <span className="text-xs text-zinc-500">Closest clauses:</span>
@@ -80,21 +109,24 @@ export function AssistantMessage({
               ))}
             </div>
           )}
+          {verifyLine && <p className="mt-2 text-xs text-zinc-500">{verifyLine}</p>}
         </div>
       ) : (
         <div className="prose prose-sm max-w-none dark:prose-invert">
           <CiteContext.Provider value={cite}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={MARKDOWN_COMPONENTS}
+              disallowedElements={DISALLOWED}
+              unwrapDisallowed
+            >
               {linkifyCitations(text, valid)}
             </ReactMarkdown>
           </CiteContext.Provider>
         </div>
       )}
-      {meta?.uncited && meta.status === 'complete' && (
-        <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
-          uncited
-        </span>
-      )}
+      {meta?.uncited && meta.status === 'complete' && <span className={badge}>uncited</span>}
+      {!meta && !streaming && <span className={badge}>incomplete</span>}
     </div>
   );
-}
+});

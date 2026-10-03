@@ -100,4 +100,70 @@ describe('createChatTransport 401 handling', () => {
       'Bearer new',
     ]);
   });
+
+  const send = (transport: ReturnType<typeof createChatTransport>) =>
+    transport.sendMessages({
+      chatId: 'x',
+      trigger: 'submit-message',
+      messageId: undefined,
+      messages: [user('m', 'hi')],
+      abortSignal: undefined,
+    });
+
+  it('cancels the rejected 401 response body before retrying', async () => {
+    store('old');
+    const cancel = vi.fn();
+    let chatCalls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url.endsWith('/auth/guest')) {
+          return new Response(
+            JSON.stringify({ token: 'new', user: { role: 'guest' }, expiresAt: future() }),
+            { status: 201, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (++chatCalls === 1) {
+          return new Response(new ReadableStream({ cancel }), { status: 401 });
+        }
+        return new Response('data: [DONE]\n\n', {
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      }),
+    );
+    await send(createChatTransport(() => ({})));
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(chatCalls).toBe(2);
+  });
+
+  it('does not retry a 429 (the retry would spend budget again)', async () => {
+    store('tok');
+    const fetchMock = vi.fn(
+      async () =>
+        new Response('{"message":"Rate limit exceeded","retryAfterSeconds":30}', { status: 429 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(send(createChatTransport(() => ({})))).rejects.toThrow(/Rate limit exceeded/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry twice when the fresh token is rejected too', async () => {
+    store('old');
+    let chatCalls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url.endsWith('/auth/guest')) {
+          return new Response(
+            JSON.stringify({ token: 'new', user: { role: 'guest' }, expiresAt: future() }),
+            { status: 201, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        chatCalls++;
+        return new Response('{"message":"Unauthorized"}', { status: 401 });
+      }),
+    );
+    await expect(send(createChatTransport(() => ({})))).rejects.toThrow(/Unauthorized/);
+    expect(chatCalls).toBe(2);
+  });
 });

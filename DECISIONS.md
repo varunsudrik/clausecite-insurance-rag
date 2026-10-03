@@ -57,6 +57,7 @@ Short records of choices that refine or deviate from the design spec, with the r
 **Decision:** the API takes `{ conversationId?, message, documentIds?, mode }` and reloads the history from Postgres (sanitized: citation markers stripped, roles alternating). The web client will send only the new message through the AI SDK transport's `prepareSendMessagesRequest`.
 **Why:** the client cannot inject or rewrite history, and citations are validated against sources the server itself retrieved.
 **Consequence:** Phase 1B web work must configure `prepareSendMessagesRequest` (send the last user message plus `conversationId`); the stream's final `data-meta` carries the validated `answer` and a refusal's `suggestions` so the UI does not depend on the raw deltas.
+Scope is per request: omitting documentIds searches all policies, even mid-conversation.
 
 ## 011 — API currently crash-only on broker loss (resolved in Phase 1B)
 

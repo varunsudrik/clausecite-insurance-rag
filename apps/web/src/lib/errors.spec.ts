@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeChatError, describeError, formatWait } from './errors';
+import { describeChatError, describeError, formatWait, isConversationGone } from './errors';
 import { ApiError } from './http-error';
 
 describe('describeError', () => {
@@ -56,8 +56,10 @@ describe('describeChatError', () => {
 
   it('passes other API and stream error texts through', () => {
     expect(
-      describeChatError(new Error('{"statusCode":404,"message":"conversation not found"}')),
-    ).toBe('conversation not found');
+      describeChatError(
+        new Error('{"statusCode":404,"message":"one or more documents not found"}'),
+      ),
+    ).toBe('one or more documents not found');
     expect(
       describeChatError(
         new Error('Something went wrong while generating the answer. Please retry.'),
@@ -69,5 +71,28 @@ describe('describeChatError', () => {
     expect(describeChatError(new TypeError('Failed to fetch'))).toMatch(
       /could not reach the server/i,
     );
+  });
+});
+
+describe('a conversation the API no longer knows', () => {
+  const gone = new Error(
+    '{"message":"conversation not found","error":"Not Found","statusCode":404}',
+  );
+
+  it('is recognised from the 404 body', () => {
+    expect(isConversationGone(gone)).toBe(true);
+    expect(
+      isConversationGone(
+        new Error('{"message":"one or more documents not found","statusCode":404}'),
+      ),
+    ).toBe(false);
+    expect(
+      isConversationGone(new Error('{"message":"conversation not found","statusCode":500}')),
+    ).toBe(false);
+    expect(isConversationGone(new Error('conversation not found'))).toBe(false);
+  });
+
+  it('is explained as a fresh start instead of a bare "not found"', () => {
+    expect(describeChatError(gone)).toMatch(/no longer available.*new chat/i);
   });
 });

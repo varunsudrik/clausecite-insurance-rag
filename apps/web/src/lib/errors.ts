@@ -30,6 +30,9 @@ export function describeError(e: unknown): string {
  */
 export function describeChatError(error: Error): string {
   if (error instanceof TypeError) return describeError(error);
+  if (isConversationGone(error)) {
+    return 'This conversation is no longer available. Your next question starts a new chat.';
+  }
   const { retryAfterSeconds, text } = parseApiErrorMessage(error.message);
   if (retryAfterSeconds === undefined) return text;
   const wait =
@@ -37,4 +40,10 @@ export function describeChatError(error: Error): string {
       ? `${Math.max(1, Math.ceil(retryAfterSeconds))}s`
       : formatWait(retryAfterSeconds);
   return `You've hit the limit — try again in ${wait}. (${text})`;
+}
+
+/** The API answered 404 "conversation not found" (e.g. the guest identity changed): the id is dead. */
+export function isConversationGone(error: Error): boolean {
+  const { status, text } = parseApiErrorMessage(error.message);
+  return status === 404 && /conversation not found/i.test(text);
 }

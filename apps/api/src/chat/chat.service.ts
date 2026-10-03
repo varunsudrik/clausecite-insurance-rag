@@ -104,7 +104,9 @@ export class ChatService {
       .values({ conversationId: conversation.id, role: 'user', content: body.message });
     return {
       conversationId: conversation.id,
-      documentIds: requestedIds ?? conversation.documentIds ?? undefined,
+      // Scope is per request: omitting `documentIds` searches all policies, even mid-conversation.
+      // The scope stored on the conversation (its first request's) is informational only.
+      documentIds: requestedIds,
       history,
       message: body.message,
     };

@@ -130,7 +130,8 @@ describe('ChatView', () => {
     });
 
     await user.click(screen.getByRole('button', { name: /new chat/i }));
-    expect(screen.queryByRole('button', { name: /source 1/i })).toBeNull();
+    // useChat throttles its re-renders, so the cleared transcript lands a moment later.
+    await waitFor(() => expect(screen.queryByRole('button', { name: /source 1/i })).toBeNull());
     await ask(user, 'Fresh start');
     await waitFor(() => expect(chatBodies).toHaveLength(3));
     expect(chatBodies[2]).not.toHaveProperty('conversationId');
@@ -182,11 +183,113 @@ describe('ChatView', () => {
     );
   });
 
-  it('shows the stream error text for a failed generation and lets the user retry', async () => {
+  it('keeps the scope per request: narrowing to one policy, then back to all policies', async () => {
+    const { chatBodies, user } = setup();
+    render(<ChatView />);
+    await user.click(await screen.findByText(/all policies/i, { selector: 'summary' }));
+    await user.click(await screen.findByRole('checkbox', { name: /alpha policy/i }));
+    await ask(user, 'first');
+    await screen.findByRole('button', { name: /source 1/i });
+    expect(chatBodies[0]).toMatchObject({ documentIds: ['a'] });
+
+    await user.click(screen.getByRole('radio', { name: /all policies/i }));
+    await ask(user, 'second');
+    await waitFor(() => expect(chatBodies).toHaveLength(2));
+    expect(chatBodies[1]).toEqual({ conversationId: 'conv-1', message: 'second', mode: 'quick' });
+    expect(chatBodies[1]).not.toHaveProperty('documentIds');
+  });
+
+  it('puts the question back in the input and drops its bubble when the request is rejected', async () => {
+    const { chatBodies, user } = setup(() =>
+      json(429, { statusCode: 429, message: 'Rate limit exceeded', retryAfterSeconds: 42 }),
+    );
+    render(<ChatView />);
+    await ask(user, 'What about cataract?');
+    await screen.findByRole('alert');
+    expect(screen.getByRole('textbox')).toHaveValue('What about cataract?');
+    await waitFor(() =>
+      expect(screen.queryByText('What about cataract?', { selector: 'div' })).toBeNull(),
+    );
+    expect(chatBodies).toHaveLength(1);
+  });
+
+  it('restores the draft once per failure: clearing it afterwards sticks', async () => {
+    const { user } = setup(() =>
+      json(429, { statusCode: 429, message: 'Rate limit exceeded', retryAfterSeconds: 5 }),
+    );
+    render(<ChatView />);
+    await ask(user, 'draft me');
+    await screen.findByRole('alert');
+    expect(screen.getByRole('textbox')).toHaveValue('draft me');
+    await user.clear(screen.getByRole('textbox'));
+    await user.type(screen.getByRole('textbox'), 'z');
+    expect(screen.getByRole('textbox')).toHaveValue('z');
+  });
+
+  it('shows the stream error text for a failed generation and lets the user retry it', async () => {
+    let calls = 0;
+    const { chatBodies, user } = setup(() =>
+      ++calls === 1
+        ? new Response(
+            `data: ${JSON.stringify({ type: 'error', errorText: 'Something went wrong while generating the answer. Please retry.' })}\n\ndata: [DONE]\n\n`,
+            {
+              headers: {
+                'content-type': 'text/event-stream',
+                'x-vercel-ai-ui-message-stream': 'v1',
+              },
+            },
+          )
+        : chatStream(),
+    );
+    render(<ChatView />);
+    await ask(user, 'retry me');
+    expect(await screen.findByRole('alert')).toHaveTextContent(/something went wrong/i);
+    expect(screen.getByRole('textbox')).toBeEnabled();
+    expect(screen.getByRole('textbox')).toHaveValue('retry me');
+
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+    expect(await screen.findByRole('button', { name: /source 1/i })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(chatBodies.map((b) => b.message)).toEqual(['retry me', 'retry me']);
+  });
+
+  it('starts a new conversation after the API reports the old one as gone', async () => {
+    let calls = 0;
+    const { chatBodies, user } = setup(() =>
+      ++calls === 2
+        ? json(404, { statusCode: 404, message: 'conversation not found', error: 'Not Found' })
+        : chatStream(`conv-${calls}`),
+    );
+    render(<ChatView />);
+    await ask(user, 'one');
+    await screen.findByRole('button', { name: /source 1/i });
+
+    await ask(user, 'two');
+    expect(await screen.findByRole('alert')).toHaveTextContent(/no longer available/i);
+    expect(chatBodies[1]).toMatchObject({ conversationId: 'conv-1' });
+    expect(screen.getByRole('textbox')).toHaveValue('two');
+
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+    await waitFor(() => expect(chatBodies).toHaveLength(3));
+    expect(chatBodies[2]).toEqual({ message: 'two', mode: 'quick' });
+  });
+
+  it('marks an answer that ended without its final meta as incomplete', async () => {
+    const parts = [
+      { type: 'start', messageId: 'srv-1' },
+      {
+        type: 'data-sources',
+        data: { conversationId: 'conv-9', question: 'q', sources: [source] },
+      },
+      { type: 'text-start', id: 't' },
+      { type: 'text-delta', id: 't', delta: 'Half an answer [1]' },
+      { type: 'text-end', id: 't' },
+      { type: 'finish' },
+    ];
     const { user } = setup(
       () =>
         new Response(
-          `data: ${JSON.stringify({ type: 'error', errorText: 'Something went wrong while generating the answer. Please retry.' })}\n\ndata: [DONE]\n\n`,
+          parts.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('') + 'data: [DONE]\n\n',
           {
             headers: { 'content-type': 'text/event-stream', 'x-vercel-ai-ui-message-stream': 'v1' },
           },
@@ -194,7 +297,56 @@ describe('ChatView', () => {
     );
     render(<ChatView />);
     await ask(user, 'q');
-    expect(await screen.findByRole('alert')).toHaveTextContent(/something went wrong/i);
-    expect(screen.getByRole('textbox')).toBeEnabled();
+    expect(await screen.findByText('incomplete')).toBeInTheDocument();
+  });
+
+  describe('focus', () => {
+    /** An answer that stays open until `finish()`; lets a test act while the turn is in flight. */
+    function openStream() {
+      const encoder = new TextEncoder();
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      const send = (chunk: object | '[DONE]') =>
+        controller.enqueue(
+          encoder.encode(`data: ${chunk === '[DONE]' ? chunk : JSON.stringify(chunk)}\n\n`),
+        );
+      const response = new Response(
+        new ReadableStream<Uint8Array>({ start: (c) => (controller = c) }),
+        { headers: { 'content-type': 'text/event-stream', 'x-vercel-ai-ui-message-stream': 'v1' } },
+      );
+      const finish = () => {
+        send({ type: 'start', messageId: 'srv-1' });
+        send({
+          type: 'data-sources',
+          data: { conversationId: 'conv-1', question: 'q', sources: [source] },
+        });
+        send({ type: 'finish' });
+        send('[DONE]');
+        controller.close();
+      };
+      return { response, finish };
+    }
+
+    it('hands focus back to the input when a turn ends', async () => {
+      const { response, finish } = openStream();
+      const { user } = setup(() => response);
+      render(<ChatView />);
+      await ask(user, 'q');
+      finish();
+      await waitFor(() => expect(screen.getByRole('textbox')).toBeEnabled());
+      await waitFor(() => expect(screen.getByRole('textbox')).toHaveFocus());
+    });
+
+    it('does not steal focus from something the user moved to during the turn', async () => {
+      const { response, finish } = openStream();
+      const { user } = setup(() => response);
+      render(<ChatView />);
+      await ask(user, 'q');
+      const scope = screen.getByText(/all policies/i, { selector: 'summary' });
+      await user.click(scope);
+      expect(scope).toHaveFocus();
+      finish();
+      await waitFor(() => expect(screen.getByRole('textbox')).toBeEnabled());
+      expect(scope).toHaveFocus();
+    });
   });
 });
