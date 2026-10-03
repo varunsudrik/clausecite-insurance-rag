@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeError, formatWait } from './errors';
+import { describeChatError, describeError, formatWait } from './errors';
 import { ApiError } from './http-error';
 
 describe('describeError', () => {
@@ -37,5 +37,37 @@ describe('describeError', () => {
     expect(formatWait(89)).toBe('89 s');
     expect(formatWait(120)).toBe('2 min');
     expect(formatWait(7200)).toBe('2 h');
+  });
+});
+
+describe('describeChatError', () => {
+  it('explains a 429 with the wait time and the server reason', () => {
+    expect(
+      describeChatError(
+        new Error('{"statusCode":429,"message":"Rate limit exceeded","retryAfterSeconds":42}'),
+      ),
+    ).toBe("You've hit the limit — try again in 42s. (Rate limit exceeded)");
+    expect(
+      describeChatError(
+        new Error('{"message":"Daily token budget exhausted","retryAfterSeconds":7200}'),
+      ),
+    ).toBe("You've hit the limit — try again in 2 h. (Daily token budget exhausted)");
+  });
+
+  it('passes other API and stream error texts through', () => {
+    expect(
+      describeChatError(new Error('{"statusCode":404,"message":"conversation not found"}')),
+    ).toBe('conversation not found');
+    expect(
+      describeChatError(
+        new Error('Something went wrong while generating the answer. Please retry.'),
+      ),
+    ).toBe('Something went wrong while generating the answer. Please retry.');
+  });
+
+  it('explains a network failure', () => {
+    expect(describeChatError(new TypeError('Failed to fetch'))).toMatch(
+      /could not reach the server/i,
+    );
   });
 });
