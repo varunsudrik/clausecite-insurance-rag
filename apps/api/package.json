@@ -9,8 +9,7 @@
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --project unit --passWithNoTests",
-    "test:int": "vitest run --project integration",
-    "seed:admin": "node dist/scripts/seed-admin.js"
+    "test:int": "vitest run --project integration"
   },
   "dependencies": {
     "@clausecite/core": "workspace:*",
