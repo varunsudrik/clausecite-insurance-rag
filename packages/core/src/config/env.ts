@@ -66,7 +66,12 @@ export function loadEnv<S extends z.ZodType>(
   schema: S,
   source: Record<string, string | undefined> = process.env,
 ): z.infer<S> {
-  const result = schema.safeParse(source);
+  // `KEY=` in a .env file yields '' - treat it as unset so defaults apply
+  // (z.coerce.number() would otherwise turn '' into 0).
+  const present = Object.fromEntries(
+    Object.entries(source).filter(([, value]) => value !== undefined && value.trim() !== ''),
+  );
+  const result = schema.safeParse(present);
   if (!result.success) {
     throw new Error(`Invalid environment:\n${z.prettifyError(result.error)}`);
   }

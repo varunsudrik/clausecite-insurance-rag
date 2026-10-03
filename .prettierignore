@@ -1,0 +1,5 @@
+pnpm-lock.yaml
+.superpowers/
+docs/
+**/dist/
+**/drizzle/

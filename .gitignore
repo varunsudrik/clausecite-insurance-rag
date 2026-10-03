@@ -9,3 +9,4 @@ coverage/
 data/pdfs/
 packages/evals/reports/
 .DS_Store
+AGENTS.md

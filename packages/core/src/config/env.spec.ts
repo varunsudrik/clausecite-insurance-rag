@@ -17,6 +17,22 @@ describe('loadEnv', () => {
     ]);
   });
 
+  it('treats empty values as unset so defaults apply', () => {
+    expect(loadEnv(retrievalEnv, { RERANK_THRESHOLD: '' }).RERANK_THRESHOLD).toBe(0.2);
+    expect(loadEnv(retrievalEnv, { RERANK_THRESHOLD: '   ' }).RERANK_THRESHOLD).toBe(0.2);
+    expect(loadEnv(authEnv, { JWT_SECRET: 'x'.repeat(32), API_KEY: '' }).API_KEY).toBeUndefined();
+  });
+
+  it('parses retry delays with whitespace and rejects non-numeric entries', () => {
+    expect(
+      loadEnv(rabbitEnv, { RABBITMQ_URL: 'amqp://x', INGEST_RETRY_DELAYS_MS: '1, 2' })
+        .INGEST_RETRY_DELAYS_MS,
+    ).toEqual([1, 2]);
+    expect(() =>
+      loadEnv(rabbitEnv, { RABBITMQ_URL: 'amqp://x', INGEST_RETRY_DELAYS_MS: '10,abc' }),
+    ).toThrow(/Invalid environment/);
+  });
+
   it('throws a readable error listing the missing variable', () => {
     expect(() => loadEnv(authEnv, {})).toThrow(/Invalid environment[\s\S]*JWT_SECRET/);
   });
