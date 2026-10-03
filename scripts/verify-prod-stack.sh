@@ -149,6 +149,12 @@ code=$(curl -sk --max-time 10 -X POST -o "$WORK/guest.json" -w '%{http_code}' "$
 grep -q '"token"' "$WORK/guest.json" || fail "POST /api/auth/guest returned no token"
 echo "ok   POST /api/auth/guest 201 with a token"
 
+# Caddy owns HSTS and withholds it for localhost; the API (helmet) must not send its own copy.
+curl -sk --max-time 10 -D "$WORK/api.headers" -o /dev/null "$BASE/api/health" || fail "GET /api/health (headers) failed"
+grep -qi '^x-content-type-options:' "$WORK/api.headers" || fail "GET /api/health lost the helmet security headers"
+if grep -qi '^strict-transport-security:' "$WORK/api.headers"; then fail "GET /api/health sends HSTS for localhost"; fi
+echo "ok   GET /api/health keeps the helmet headers and sends no HSTS (localhost)"
+
 # The admin is seeded from ADMIN_EMAIL/ADMIN_PASSWORD, so this proves env_file reached the api container.
 code=$(printf '{"email":"%s","password":"%s"}' "$ADMIN_EMAIL" "$admin_password" |
   curl -sk --max-time 10 -X POST -H 'Content-Type: application/json' --data @- \

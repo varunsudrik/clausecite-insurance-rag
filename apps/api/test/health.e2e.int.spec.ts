@@ -32,9 +32,10 @@ describe('GET /health', () => {
     expect(res.body).toEqual({ status: 'ok', checks: { db: true, redis: true, rabbitmq: true } });
   });
 
-  it('sets security headers', async () => {
+  it('sets security headers, but leaves Strict-Transport-Security to the reverse proxy', async () => {
     const res = await h.http.get('/health');
     expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['strict-transport-security']).toBeUndefined();
   });
 });
 

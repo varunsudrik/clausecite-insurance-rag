@@ -5,7 +5,9 @@ import { API_ENV, type ApiConfig } from './infra/tokens.js';
 
 export function configureApp<T extends INestApplication>(app: T): T {
   const env = app.get<ApiConfig>(API_ENV);
-  app.use(helmet());
+  // Caddy owns Strict-Transport-Security (it withholds it for localhost, and a second copy from here
+  // would be passed through by the proxy and pin localhost in a browser). Every other default stays.
+  app.use(helmet({ hsts: false }));
   app.enableCors({ origin: env.WEB_ORIGIN, exposedHeaders: ['Retry-After'] });
   // 0 = no proxy: req.ip is the socket address and X-Forwarded-For is ignored. Production sits behind
   // exactly one proxy (Caddy) and sets 1; trusting more hops than exist lets clients spoof req.ip.
