@@ -6,8 +6,8 @@
 **/.turbo
 **/*.tsbuildinfo
 
-# Secrets: any local env file, but not the committed template
-.env*
+# Secrets: any env file at any depth, but not the committed template
+**/.env*
 !.env.prod.example
 
 # Runtime data and local artefacts

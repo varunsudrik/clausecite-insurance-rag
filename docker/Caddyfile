@@ -18,8 +18,11 @@
 		reverse_proxy web:3000
 	}
 
+	# Not for localhost: a year-long HSTS pin on localhost would break every other local http:// app.
+	@hsts not host localhost
+	header @hsts Strict-Transport-Security "max-age=31536000"
+
 	header {
-		Strict-Transport-Security "max-age=31536000"
 		-Server
 		-X-Powered-By
 	}

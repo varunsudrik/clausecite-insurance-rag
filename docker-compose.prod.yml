@@ -128,7 +128,9 @@ services:
         condition: service_healthy
       redis-cache:
         condition: service_healthy
-      # The API boots and serves chat/search without the broker (DECISIONS 011).
+      # The API process starts and serves chat/search without the broker (DECISIONS 011), so
+      # `service_started` is enough here. Its /health still answers 503 while RabbitMQ is down, so
+      # the api only turns healthy (and caddy only starts) once the broker is reachable too.
       rabbitmq:
         condition: service_started
     healthcheck:
@@ -194,19 +196,50 @@ services:
       web:
         condition: service_healthy
 
-  # A daily pg_dump kept for 7 days. BACKUP_DIR defaults to ./backups next to this file.
+  # A pg_dump every 24 h, kept for 7 days (BACKUP_DIR, default ./backups next to this file).
+  # A dump is written to a .tmp file and renamed into place only when it succeeded, so a failed run
+  # never truncates an existing good dump; it logs `backup FAILED` to stderr and retries in 5 minutes.
+  # The healthcheck turns unhealthy when the newest dump is missing, empty or older than 26 h.
+  # The dumps stay on this host and are NOT encrypted: copy them off-host (docs/deploy.md covers this).
   backup:
     <<: *service
     image: pgvector/pgvector:pg17
+    # libpq reads these, so the password never appears in pg_dump's argv.
     environment:
-      DATABASE_URL: postgres://clausecite:${POSTGRES_PASSWORD}@postgres:5432/clausecite
+      PGHOST: postgres
+      PGUSER: clausecite
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: clausecite
     # `$$` keeps compose from interpolating; the shell inside the container expands it.
     command:
       - sh
       - -c
-      - 'while true; do pg_dump -Fc "$$DATABASE_URL" > /backups/clausecite-$$(date +%F).dump && find /backups -name "*.dump" -mtime +7 -delete; sleep 86400; done'
+      - |
+        umask 077
+        while true; do
+          f=/backups/clausecite-$$(date +%F).dump
+          if pg_dump -Fc -f "$$f.tmp" && [ -s "$$f.tmp" ] && mv "$$f.tmp" "$$f"; then
+            echo "backup ok $$f $$(wc -c < "$$f")"
+            find /backups -name '*.dump' -mtime +7 -delete
+            find /backups -name '*.dump.tmp' -mtime +1 -delete
+            sleep 86400
+          else
+            rm -f "$$f.tmp"
+            echo "backup FAILED: pg_dump did not produce a dump; retrying in 300 s" >&2
+            sleep 300
+          fi
+        done
     volumes:
       - ${BACKUP_DIR:-./backups}:/backups
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'f=$$(ls -t /backups/*.dump 2>/dev/null | head -n 1); [ -n "$$f" ] && [ -s "$$f" ] && [ -z "$$(find "$$f" -mmin +1560)" ]'
+      interval: 5m
+      timeout: 10s
+      retries: 1
+      # Covers postgres coming up and the first dump (and one 300 s retry) before the check counts.
+      start_period: 15m
     depends_on:
       postgres:
         condition: service_healthy

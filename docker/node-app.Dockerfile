@@ -20,11 +20,12 @@ RUN pnpm fetch
 
 # --- build: install offline, compile the app and its workspace deps, then extract a prod-only tree ---
 FROM deps AS build
-ARG APP
-RUN test -n "$APP" || (echo "build-arg APP is required (api|worker)" >&2; exit 1)
 COPY . .
 # argon2 (native) is the only dependency allowed to run build scripts (root `pnpm.onlyBuiltDependencies`).
 RUN pnpm install --offline --frozen-lockfile
+# Declared after the install on purpose: api and worker then share the install layer above.
+ARG APP
+RUN test -n "$APP" || (echo "build-arg APP is required (api|worker)" >&2; exit 1)
 RUN pnpm turbo run build --filter=@clausecite/${APP}...
 # `--legacy` copies workspace packages (core: dist + drizzle migrations) instead of requiring
 # `inject-workspace-packages`; `--prod` drops devDependencies (and with them testcontainers).

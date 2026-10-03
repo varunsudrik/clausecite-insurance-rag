@@ -25,6 +25,14 @@ compose() {
     docker compose -p "$PROJECT" -f docker-compose.prod.yml --env-file "$ENV_FILE" "$@"
 }
 
+# Never aborts the caller (it runs from the EXIT trap), but a failed teardown is reported, not hidden.
+teardown() {
+  if ! compose down -v --remove-orphans >"$WORK/down.log" 2>&1; then
+    echo "WARNING: 'docker compose down -v' failed for project $PROJECT; remove it by hand. Last output:" >&2
+    tail -n 5 "$WORK/down.log" >&2 || true
+  fi
+}
+
 cleanup() {
   local rc=$?
   if [[ $rc -ne 0 && -f $ENV_FILE ]]; then
@@ -33,7 +41,7 @@ cleanup() {
     compose logs --no-color --tail 40 >&2 || true
   fi
   if [[ -f $ENV_FILE ]]; then
-    compose down -v --remove-orphans >/dev/null 2>&1 || true
+    teardown
   fi
   rm -f "$ENV_FILE"
   rm -rf "$BACKUP_DIR" "$WORK"
@@ -82,7 +90,7 @@ umask 077
 unset openrouter_key
 
 # --- start from a clean slate, and make sure Caddy can bind 80/443 ---
-compose down -v --remove-orphans >/dev/null 2>&1 || true
+teardown
 for port in 80 443; do
   if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
     fail "port $port is already in use on this machine; stop what is listening on it and retry"
@@ -108,8 +116,19 @@ done
 echo "ok   /api/health 200, db/redis/rabbitmq true"
 
 # The migrate job must have really run (a symlinked entry point once made it exit 0 having done nothing).
-compose logs --no-color migrate 2>&1 | grep -q 'migrations applied' || fail "the migrate service did not apply migrations"
+# Captured first: `grep -q` closing the pipe early would SIGPIPE `compose logs` and fail under pipefail.
+migrate_logs=$(compose logs --no-color migrate 2>&1) || fail "could not read the migrate service logs"
+grep -q 'migrations applied' <<<"$migrate_logs" || fail "the migrate service did not apply migrations"
 echo "ok   migrate service applied the migrations"
+
+# --- the worker must be up and steady: `restart: unless-stopped` would hide a crash loop ---
+sleep 5
+worker_id=$(compose ps -q worker) || fail "could not look up the worker container"
+[[ -n $worker_id ]] || fail "the worker container does not exist"
+worker_state=$(docker inspect -f '{{.State.Status}} restarts={{.RestartCount}}' "$worker_id") ||
+  fail "could not inspect the worker container"
+[[ $worker_state == "running restarts=0" ]] || fail "the worker is not steady: $worker_state"
+echo "ok   worker running, 0 restarts"
 
 # --- the web app, through Caddy ---
 code=$(curl -sk --max-time 10 -D "$WORK/web.headers" -o "$WORK/web.html" -w '%{http_code}' "$BASE/")
@@ -118,9 +137,11 @@ grep -q 'ClauseCite' "$WORK/web.html" || fail "GET / does not contain ClauseCite
 echo "ok   GET / 200, HTML contains ClauseCite"
 
 grep -qi '^content-security-policy:.*frame-ancestors' "$WORK/web.headers" || fail "GET / has no Content-Security-Policy"
-grep -qi '^strict-transport-security:' "$WORK/web.headers" || fail "GET / has no Strict-Transport-Security"
+# HSTS is deliberately withheld for localhost (it would pin localhost in the browser for a year).
+if grep -qi '^strict-transport-security:' "$WORK/web.headers"; then fail "GET / sends HSTS for localhost"; fi
 if grep -qi '^server:' "$WORK/web.headers"; then fail "GET / still sends a Server header"; fi
-echo "ok   GET / sends CSP and HSTS and no Server header"
+if grep -qi '^x-powered-by:' "$WORK/web.headers"; then fail "GET / still sends X-Powered-By"; fi
+echo "ok   GET / sends the CSP, no HSTS (localhost), no Server or X-Powered-By header"
 
 # --- the API, through Caddy (the /api prefix is stripped) ---
 code=$(curl -sk --max-time 10 -X POST -o "$WORK/guest.json" -w '%{http_code}' "$BASE/api/auth/guest")
@@ -136,9 +157,12 @@ code=$(printf '{"email":"%s","password":"%s"}' "$ADMIN_EMAIL" "$admin_password" 
 echo "ok   seeded admin can log in"
 
 # --- the web container must not see any server secret ---
-if compose exec -T web env | grep -qE 'OPENROUTER|JWT_SECRET|PASSWORD|DATABASE_URL'; then
+web_env=$(compose exec -T web env) || fail "could not read the web container's environment"
+[[ -n $web_env ]] || fail "the web container's environment came back empty"
+if grep -qE 'OPENROUTER|JWT_SECRET|PASSWORD|DATABASE_URL' <<<"$web_env"; then
   fail "the web container's environment holds a server secret"
 fi
+unset web_env
 echo "ok   web container environment holds no secrets"
 
 # --- the backup service writes its first dump straight away ---
@@ -147,6 +171,10 @@ until compgen -G "$BACKUP_DIR/clausecite-*.dump" >/dev/null && [[ -s $(ls "$BACK
   ((SECONDS < deadline)) || fail "the backup service wrote no dump within 30s"
   sleep 2
 done
-echo "ok   backup service wrote a pg_dump"
+backup_logs=$(compose logs --no-color backup 2>&1) || fail "could not read the backup service logs"
+grep -q 'backup ok /backups/clausecite-' <<<"$backup_logs" || fail "the backup service did not log 'backup ok'"
+if grep -q 'backup FAILED' <<<"$backup_logs"; then fail "the backup service logged 'backup FAILED'"; fi
+if compgen -G "$BACKUP_DIR/*.tmp" >/dev/null; then fail "the backup service left a .tmp file behind"; fi
+echo "ok   backup service wrote a pg_dump and logged backup ok"
 
 echo "prod stack OK"
