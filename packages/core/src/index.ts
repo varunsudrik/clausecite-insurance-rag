@@ -11,3 +11,4 @@ export * from './ingest/pdf-lines.js';
 export * from './ingest/structure.js';
 export * from './ingest/tokens.js';
 export * from './ingest/chunker.js';
+export * from './ingest/ingest-document.js';
