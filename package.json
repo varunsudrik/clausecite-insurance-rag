@@ -16,10 +16,13 @@
     "infra:up": "docker compose up -d --wait",
     "infra:down": "docker compose down",
     "db:generate": "pnpm --filter @clausecite/core db:generate",
-    "db:migrate": "pnpm --filter @clausecite/core build && pnpm --filter @clausecite/core db:migrate"
+    "db:migrate": "pnpm --filter @clausecite/core build && pnpm --filter @clausecite/core db:migrate",
+    "smoke:models": "node --env-file=.env scripts/smoke-models.ts"
   },
   "devDependencies": {
+    "@clausecite/core": "workspace:*",
     "@types/node": "^24.0.0",
+    "ai": "^7.0.127",
     "oxlint": "^1.58.0",
     "prettier": "^3.4.2",
     "turbo": "^2.11.7",
