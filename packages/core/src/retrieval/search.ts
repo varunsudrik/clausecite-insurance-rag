@@ -56,7 +56,12 @@ const EMPTY_RANKS = sql`SELECT NULL::uuid AS id, NULL::int AS rnk WHERE FALSE`;
 
 export async function searchChunks(db: Db, p: SearchParams): Promise<Candidate[]> {
   const limit = p.limit ?? 30;
-  const filter: SQL = p.documentIds?.length
+  if (p.strategy !== 'fts' && !p.queryEmbedding) {
+    throw new Error(`strategy "${p.strategy}" requires queryEmbedding`);
+  }
+  // undefined/null = no document filter; an empty list matches nothing (never "search everything").
+  if (p.documentIds && p.documentIds.length === 0) return [];
+  const filter: SQL = p.documentIds
     ? sql`AND c.document_id IN (${sql.join(
         p.documentIds.map((id) => sql`${id}::uuid`),
         sql`, `,
@@ -65,15 +70,19 @@ export async function searchChunks(db: Db, p: SearchParams): Promise<Candidate[]
 
   let vec = EMPTY_RANKS;
   if (p.strategy !== 'fts') {
-    if (!p.queryEmbedding) throw new Error(`strategy "${p.strategy}" requires queryEmbedding`);
     const q = JSON.stringify(p.queryEmbedding);
-    // Inner ORDER BY ... LIMIT uses the HNSW index; row_number() is computed on the small result.
+    // The inner ORDER BY ... LIMIT lets the HNSW index supply the nearest candidates (ordering by the
+    // select-list alias keeps that pathkey index-friendly and binds the embedding once).
+    // With hnsw.iterative_scan = relaxed_order the index may emit rows slightly out of order, and the
+    // planner would otherwise trust the subquery's ordering and skip the window sort. `dist + 0` is
+    // pgvector's documented remedy: it forces a real Sort of the (at most `limit`) rows, so ranks
+    // always follow exact distance. `id` makes ties deterministic.
     vec = sql`
-      SELECT id, (row_number() OVER (ORDER BY dist))::int AS rnk FROM (
+      SELECT id, (row_number() OVER (ORDER BY dist + 0, id))::int AS rnk FROM (
         SELECT c.id, c.embedding <=> ${q}::vector AS dist
         FROM chunks c
         WHERE TRUE ${filter}
-        ORDER BY c.embedding <=> ${q}::vector
+        ORDER BY dist
         LIMIT ${limit}
       ) v`;
   }
@@ -85,7 +94,7 @@ export async function searchChunks(db: Db, p: SearchParams): Promise<Candidate[]
         SELECT c.id, ts_rank_cd(c.tsv, q) AS rank
         FROM chunks c, websearch_to_tsquery('english', ${p.queryText}) q
         WHERE c.tsv @@ q ${filter}
-        ORDER BY rank DESC
+        ORDER BY rank DESC, c.id
         LIMIT ${limit}
       ) f`;
   }

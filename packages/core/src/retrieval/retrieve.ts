@@ -69,8 +69,10 @@ export async function retrieve(deps: RetrieveDeps, opts: RetrieveOptions): Promi
       candidates.length,
     );
     timings.rerankMs = performance.now() - t;
+    // Don't rely on the Reranker implementation's ordering: the gate and the suggestions need best-first.
     const reranked = hits
       .filter((h) => candidates[h.index] !== undefined)
+      .sort((a, b) => b.score - a.score)
       .map((h) => ranked(candidates[h.index], h.score));
     const kept = reranked.filter((c) => (c.rerankScore ?? 0) >= opts.threshold).slice(0, topK);
     return {
