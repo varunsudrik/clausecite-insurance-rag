@@ -37,3 +37,9 @@ Short records of choices that refine or deviate from the design spec, with the r
 
 **Decision:** `Section/Part` lines need a strong font or a short capitalised unpunctuated title; numbered lines need a strong font or a capitalised word after the id; numeric parts > 99 and list markers are never headings.
 **Why:** insurance wording is full of cross-references ("Section 45 of the Insurance Act…") and wrapped numbers ("1.5 times the sum insured…") that otherwise become fake clauses and drop limits from the real clause text.
+
+## 008 — Admin seeded on boot; stateless JWTs; API key deferred
+
+**Decision:** the API seeds the admin from env on bootstrap (idempotent, email lowercased, refuses the placeholder and passwords under 12 characters with a warning instead of crashing); guest/admin JWTs (HS256 pinned, 24 h / 12 h) are trusted without a DB lookup; machine API-key auth arrives with the MCP server in Phase 2.
+**Why:** no separate seed step for a one-admin demo; stateless auth keeps the hot path off the DB; YAGNI for API keys until a consumer exists.
+**Consequence:** a deleted user's token stays valid until expiry; writes keyed by `sub` must tolerate FK failures.

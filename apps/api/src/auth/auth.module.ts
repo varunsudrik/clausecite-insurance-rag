@@ -12,7 +12,9 @@ import { AuthService } from './auth.service.js';
       inject: [API_ENV],
       useFactory: (env: ApiConfig) => ({
         secret: env.JWT_SECRET,
+        // Pin the algorithm on both sides: jsonwebtoken would otherwise accept HS384/HS512 too.
         signOptions: { algorithm: 'HS256' },
+        verifyOptions: { algorithms: ['HS256'] },
       }),
     }),
   ],
