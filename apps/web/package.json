@@ -1,0 +1,38 @@
+{
+  "name": "@clausecite/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --port 3000",
+    "build": "next build",
+    "start": "next start --port 3000",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:int": "echo 'no web integration tests' && exit 0"
+  },
+  "dependencies": {
+    "@ai-sdk/react": "^4.0.0",
+    "ai": "^7.0.0",
+    "next": "^16.3.0",
+    "pdfjs-dist": "6.3.289",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "react-markdown": "^10.1.0",
+    "react-pdf": "^11.0.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@clausecite/core": "workspace:*",
+    "@tailwindcss/postcss": "^4.3.0",
+    "@testing-library/dom": "^10.0.0",
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.0.0",
+    "@testing-library/user-event": "^14.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "jsdom": "^26.0.0",
+    "tailwindcss": "^4.3.0"
+  }
+}

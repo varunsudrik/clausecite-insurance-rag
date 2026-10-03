@@ -2,4 +2,6 @@ pnpm-lock.yaml
 .superpowers/
 docs/
 **/dist/
+**/.next/
+**/next-env.d.ts
 **/drizzle/

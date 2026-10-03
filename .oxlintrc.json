@@ -1,5 +1,5 @@
 {
   "rules": { "typescript/no-explicit-any": "off" },
   "env": { "node": true },
-  "ignorePatterns": ["**/dist/**", "**/.next/**", "**/drizzle/**"]
+  "ignorePatterns": ["**/dist/**", "**/.next/**", "**/next-env.d.ts", "**/drizzle/**"]
 }
