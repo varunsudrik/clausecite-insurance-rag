@@ -1,0 +1,110 @@
+[
+  {
+    "slug": "hdfc-ergo-optima-secure",
+    "insurer": "HDFC ERGO",
+    "product": "my: Optima Secure",
+    "title": "HDFC ERGO my: Optima Secure",
+    "policy_type": "health",
+    "uin": "HDFHLIP26058V082526",
+    "url": "https://customer-portal-assets.hdfcergo.com/documents/PolicyWordings_myOptimaSecure-76673175551.pdf"
+  },
+  {
+    "slug": "hdfc-ergo-optima-restore",
+    "insurer": "HDFC ERGO",
+    "product": "Optima Restore",
+    "title": "HDFC ERGO Optima Restore",
+    "policy_type": "health",
+    "uin": "HDFHLIP26055V102526",
+    "url": "https://customer-portal-assets.hdfcergo.com/documents/PolicyWordings_OptimaRestore-811520192624.pdf"
+  },
+  {
+    "slug": "star-health-family-health-optima",
+    "insurer": "Star Health",
+    "product": "Family Health Optima",
+    "title": "Star Health Family Health Optima",
+    "policy_type": "health",
+    "uin": "SHAHLIP26046V092526",
+    "url": "https://d28c6jni2fmamz.cloudfront.net/Policy_Family_Health_Optima_Insurance_Plan_V_21_bbe089bd74.pdf"
+  },
+  {
+    "slug": "niva-bupa-reassure-2",
+    "insurer": "Niva Bupa",
+    "product": "ReAssure 2.0",
+    "title": "Niva Bupa ReAssure 2.0",
+    "policy_type": "health",
+    "uin": "NBHHLIP27054V032627",
+    "url": "https://transactions.nivabupa.com/pages/doc/policy_wording/ReAssure-2.0-Policy-Wording.pdf"
+  },
+  {
+    "slug": "icici-lombard-elevate",
+    "insurer": "ICICI Lombard",
+    "product": "Elevate",
+    "title": "ICICI Lombard Elevate",
+    "policy_type": "health",
+    "uin": "ICIHLIP25048V042425",
+    "url": "https://www.icicilombard.com/docs/default-source/apps/elevateapp/assets/pdf/elevate-policy-wordings.pdf"
+  },
+  {
+    "slug": "icici-lombard-ihealth",
+    "insurer": "ICICI Lombard",
+    "product": "iHealth (Complete Health)",
+    "title": "ICICI Lombard iHealth (Complete Health)",
+    "policy_type": "health",
+    "uin": "ICIHLIP20084V031920",
+    "url": "https://www.icicilombard.com/docs/default-source/policy-wordings-product-brochure/complete-health-insurance-(ihealth)-new.pdf"
+  },
+  {
+    "slug": "care-supreme",
+    "insurer": "Care Health",
+    "product": "Care Supreme",
+    "title": "Care Health Care Supreme",
+    "policy_type": "health",
+    "uin": "CHIHLIP23128V012223",
+    "url": "https://cms.careinsurance.com/cms/public/uploads/download_center/care-supreme---policy-terms-and-conditions.pdf"
+  },
+  {
+    "slug": "sbi-general-arogya-supreme",
+    "insurer": "SBI General",
+    "product": "Arogya Supreme",
+    "title": "SBI General Arogya Supreme",
+    "policy_type": "health",
+    "uin": "SBIHLIP27036V022627",
+    "url": "https://content.sbigeneral.in/uploads/Arogya_Supreme_Policy_Wordings_w_e_f_10th_July_2026_1237d56950.pdf"
+  },
+  {
+    "slug": "tata-aig-medicare-platinum",
+    "insurer": "Tata AIG",
+    "product": "MediCare Platinum",
+    "title": "Tata AIG MediCare Platinum",
+    "policy_type": "health",
+    "uin": "TATHLIP27060V012627",
+    "url": "https://www.tataaig.com/s3/tata_aig_medicare_platinum_policy_wordings_cdbc29ba86.pdf"
+  },
+  {
+    "slug": "bajaj-allianz-health-guard-silver",
+    "insurer": "Bajaj Allianz",
+    "product": "Health Guard (Silver)",
+    "title": "Bajaj Allianz Health Guard (Silver)",
+    "policy_type": "health",
+    "uin": "BAJHLIP21185V032021",
+    "url": "https://www.bajajallianz.com/download-documents/health-insurance/health-guard-individual-policy/HG_Silver_Policy_Wording_&_CIS.pdf"
+  },
+  {
+    "slug": "arogya-sanjeevani-iffco-tokio",
+    "insurer": "IFFCO-Tokio",
+    "product": "Arogya Sanjeevani",
+    "title": "IFFCO-Tokio Arogya Sanjeevani",
+    "policy_type": "health",
+    "uin": "IFFHLIP20161V011920",
+    "url": "https://www.iffcotokio.co.in/content/dam/iffcotokio/iffco-pdf/policy-wordings-arogya-sanjeevani-policy.pdf"
+  },
+  {
+    "slug": "arogya-sanjeevani-go-digit",
+    "insurer": "Go Digit",
+    "product": "Arogya Sanjeevani",
+    "title": "Go Digit Arogya Sanjeevani",
+    "policy_type": "health",
+    "uin": "GODHLIP24179V022324",
+    "url": "https://www.godigit.com/content/dam/godigit/directportal/en/downloads/health/policy-wordings-arogya-sanjeevani-policy-go-digit.pdf"
+  }
+]

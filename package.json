@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "turbo run build",
-    "test": "turbo run test",
+    "test": "turbo run test && vitest run --project scripts",
     "test:int": "turbo run test:int --concurrency=1",
     "typecheck": "turbo run typecheck",
     "lint": "oxlint .",
@@ -20,7 +20,9 @@
     "db:migrate": "pnpm --filter @clausecite/core build && pnpm --filter @clausecite/core db:migrate",
     "smoke:models": "node --env-file=.env scripts/smoke-models.ts",
     "reembed": "node --env-file-if-exists=.env scripts/reembed.ts",
-    "fixtures:pdf": "node scripts/make-fixture-pdf.ts"
+    "fixtures:pdf": "node scripts/make-fixture-pdf.ts",
+    "sources:download": "node scripts/download-sources.ts",
+    "sources:ingest": "node --env-file-if-exists=.env scripts/ingest-sources.ts"
   },
   "devDependencies": {
     "@clausecite/core": "workspace:*",
@@ -31,7 +33,8 @@
     "prettier": "^3.4.2",
     "turbo": "^2.11.7",
     "typescript": "^6.0.2",
-    "vitest": "^4.1.2"
+    "vitest": "^4.1.2",
+    "zod": "^4.6.5"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

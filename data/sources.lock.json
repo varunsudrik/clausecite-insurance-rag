@@ -1,0 +1,86 @@
+[
+  {
+    "slug": "arogya-sanjeevani-go-digit",
+    "url": "https://www.godigit.com/content/dam/godigit/directportal/en/downloads/health/policy-wordings-arogya-sanjeevani-policy-go-digit.pdf",
+    "sha256": "70ec4e51cf03a49c06cd7b06fd2dae16ac4ab3a204591fb1e8568a50858ea75b",
+    "bytes": 576824,
+    "retrievedAt": "2026-10-03T11:46:45.802Z"
+  },
+  {
+    "slug": "arogya-sanjeevani-iffco-tokio",
+    "url": "https://www.iffcotokio.co.in/content/dam/iffcotokio/iffco-pdf/policy-wordings-arogya-sanjeevani-policy.pdf",
+    "sha256": "0f58bf1cfd383d8a68abb05179a62085b84f7eb74dbd49018e2b855e7c4d7159",
+    "bytes": 695013,
+    "retrievedAt": "2026-10-03T11:46:45.676Z"
+  },
+  {
+    "slug": "bajaj-allianz-health-guard-silver",
+    "url": "https://www.bajajallianz.com/download-documents/health-insurance/health-guard-individual-policy/HG_Silver_Policy_Wording_&_CIS.pdf",
+    "sha256": "d53374570981528daa0a96a6adf8990c347435e2ca4b029701374f36d5cd03c7",
+    "bytes": 515919,
+    "retrievedAt": "2026-10-03T11:46:45.519Z"
+  },
+  {
+    "slug": "care-supreme",
+    "url": "https://cms.careinsurance.com/cms/public/uploads/download_center/care-supreme---policy-terms-and-conditions.pdf",
+    "sha256": "2ed123866ffe89b0ddc455ebe867273450b1dbe1d5e3f3040427b0c1ba4d0a4a",
+    "bytes": 1772653,
+    "retrievedAt": "2026-10-03T11:46:40.205Z"
+  },
+  {
+    "slug": "hdfc-ergo-optima-restore",
+    "url": "https://customer-portal-assets.hdfcergo.com/documents/PolicyWordings_OptimaRestore-811520192624.pdf",
+    "sha256": "0058f205f552a171befda30071681626d19b4f8f116baa986d6318b3dae66907",
+    "bytes": 773611,
+    "retrievedAt": "2026-10-03T11:46:38.474Z"
+  },
+  {
+    "slug": "hdfc-ergo-optima-secure",
+    "url": "https://customer-portal-assets.hdfcergo.com/documents/PolicyWordings_myOptimaSecure-76673175551.pdf",
+    "sha256": "195eb0499db969c6789472e7f87ef1c72da110e2a8c7761ecb5add378fe964c1",
+    "bytes": 925936,
+    "retrievedAt": "2026-10-03T11:46:38.376Z"
+  },
+  {
+    "slug": "icici-lombard-elevate",
+    "url": "https://www.icicilombard.com/docs/default-source/apps/elevateapp/assets/pdf/elevate-policy-wordings.pdf",
+    "sha256": "46d61cbee18e10a56dca3ff4924290a5f48565d71eb91cce7e079d48015a61d8",
+    "bytes": 891156,
+    "retrievedAt": "2026-10-03T11:46:39.720Z"
+  },
+  {
+    "slug": "icici-lombard-ihealth",
+    "url": "https://www.icicilombard.com/docs/default-source/policy-wordings-product-brochure/complete-health-insurance-(ihealth)-new.pdf",
+    "sha256": "9d9904c7da454e882bf5f1bd8a6e25efa3019c0b0b219a51b05cc4f5c27f2ee6",
+    "bytes": 623993,
+    "retrievedAt": "2026-10-03T11:46:39.884Z"
+  },
+  {
+    "slug": "niva-bupa-reassure-2",
+    "url": "https://transactions.nivabupa.com/pages/doc/policy_wording/ReAssure-2.0-Policy-Wording.pdf",
+    "sha256": "bd00c98a432db2c343736278f2c9c787608a036f6ff4eff406ca920286999e0f",
+    "bytes": 670955,
+    "retrievedAt": "2026-10-03T11:46:39.499Z"
+  },
+  {
+    "slug": "sbi-general-arogya-supreme",
+    "url": "https://content.sbigeneral.in/uploads/Arogya_Supreme_Policy_Wordings_w_e_f_10th_July_2026_1237d56950.pdf",
+    "sha256": "564a77d69c2c85da6f2bf21e8ded1b501cfc2e79d7852b489ead6d8d9e06d0f2",
+    "bytes": 1099027,
+    "retrievedAt": "2026-10-03T11:46:40.426Z"
+  },
+  {
+    "slug": "star-health-family-health-optima",
+    "url": "https://d28c6jni2fmamz.cloudfront.net/Policy_Family_Health_Optima_Insurance_Plan_V_21_bbe089bd74.pdf",
+    "sha256": "033d6a9576c73efc25aae29c20e97a0cc89d43e43896269a4ed64d663798a54c",
+    "bytes": 1272585,
+    "retrievedAt": "2026-10-03T11:46:39.031Z"
+  },
+  {
+    "slug": "tata-aig-medicare-platinum",
+    "url": "https://www.tataaig.com/s3/tata_aig_medicare_platinum_policy_wordings_cdbc29ba86.pdf",
+    "sha256": "c3a0fd4f6a08c0d7ff2e28b097248add4aef2f70033922a412fe85bb915c8003",
+    "bytes": 633761,
+    "retrievedAt": "2026-10-03T11:46:44.568Z"
+  }
+]
