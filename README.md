@@ -160,14 +160,14 @@ pnpm test:int    # integration tests: needs Docker (Testcontainers, random host 
 
 Every test uses mock models, so neither command needs an OpenRouter key. CI runs build, lint, typecheck, format check, `pnpm test` and `pnpm test:int` on every push and pull request ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
-Test counts as printed by each package's Vitest run on 2026-10-03, 466 unit and 146 integration tests in total:
+Test counts as printed by each package's Vitest run on 2026-10-03, 473 unit and 146 integration tests in total:
 
 | Package              | `pnpm test`           | `pnpm test:int`     |
 | -------------------- | --------------------- | ------------------- |
 | `@clausecite/core`   | 197 tests in 17 files | 41 tests in 5 files |
 | `@clausecite/api`    | 116 tests in 11 files | 95 tests in 8 files |
 | `@clausecite/worker` | 6 tests in 1 file     | 10 tests in 2 files |
-| `@clausecite/web`    | 127 tests in 18 files | none                |
+| `@clausecite/web`    | 134 tests in 18 files | none                |
 | root `scripts`       | 20 tests in 2 files   | none                |
 
 ## Deploying
