@@ -7,6 +7,7 @@ import {
   type DbEnv,
   type DbHandle,
   type LlmEnv,
+  type Models,
   type RabbitConnection,
   type RabbitEnv,
   type StorageEnv,
@@ -15,6 +16,7 @@ import {
   Inject,
   Injectable,
   Logger,
+  Optional,
   type OnApplicationBootstrap,
   type OnApplicationShutdown,
 } from '@nestjs/common';
@@ -24,6 +26,10 @@ export type WorkerEnv = DbEnv & LlmEnv & RabbitEnv & StorageEnv;
 export const WORKER_ENV = Symbol('WORKER_ENV');
 export const DATABASE = Symbol('DATABASE');
 export const RABBIT = Symbol('RABBIT');
+/** Optional override of the models the worker builds from env; the composition test injects mocks. */
+export const WORKER_MODELS = Symbol('WORKER_MODELS');
+/** The only models ingestion needs (a full `Models` satisfies this). */
+export type WorkerModels = Pick<Models, 'embedding'> & { ids: Pick<Models['ids'], 'embedding'> };
 
 @Injectable()
 export class IngestWorker implements OnApplicationBootstrap, OnApplicationShutdown {
@@ -34,10 +40,11 @@ export class IngestWorker implements OnApplicationBootstrap, OnApplicationShutdo
     @Inject(WORKER_ENV) private readonly env: WorkerEnv,
     @Inject(DATABASE) private readonly database: DbHandle,
     @Inject(RABBIT) private readonly rabbit: RabbitConnection,
+    @Optional() @Inject(WORKER_MODELS) private readonly models?: WorkerModels,
   ) {}
 
   async onApplicationBootstrap() {
-    const models = createModels(this.env);
+    const models: WorkerModels = this.models ?? createModels(this.env);
     this.consumer = new IngestConsumer({
       channel: this.rabbit.channel,
       db: this.database.db,

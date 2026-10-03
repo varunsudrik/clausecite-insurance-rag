@@ -32,7 +32,7 @@ export function createCachedQueryEmbedder(
   model: EmbeddingModel,
   modelId: string,
   cache: KeyValueCache,
-  opts: { ttlSeconds?: number; onHit?(): void; onMiss?(): void } = {},
+  opts: { ttlSeconds?: number; timeoutMs?: number; onHit?(): void; onMiss?(): void } = {},
 ): (query: string) => Promise<number[]> {
   const ttl = opts.ttlSeconds ?? 7 * 24 * 3600;
 
@@ -57,7 +57,7 @@ export function createCachedQueryEmbedder(
     opts.onMiss?.();
     // Embed the normalized text (the cache key's input), so the cached vector is the same
     // whichever spelling of the query warmed it.
-    const embedding = await embedQuery(model, normalized);
+    const embedding = await embedQuery(model, normalized, { timeoutMs: opts.timeoutMs });
     // Round to float32 (what pgvector stores anyway) so a miss returns exactly what a later hit will.
     const stored = embedding.map(Math.fround);
     if (!isValid(stored)) return embedding;

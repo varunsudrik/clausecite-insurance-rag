@@ -175,4 +175,16 @@ describe('createCachedQueryEmbedder', () => {
     } as unknown as KeyValueCache;
     expect(await createCachedQueryEmbedder(model, 'm1', broken)('room rent')).toHaveLength(1536);
   });
+
+  it('passes timeoutMs through to the embedding call and caches nothing when it fires', async () => {
+    const model = mockEmbeddingModel(undefined, { delayMs: 200 });
+    const cache = memoryCache();
+    const begin = Date.now();
+    await expect(
+      createCachedQueryEmbedder(model, 'm1', cache, { timeoutMs: 20 })('room rent'),
+    ).rejects.toThrow();
+    expect(Date.now() - begin).toBeLessThan(150);
+    await flush();
+    expect(cache.store.size).toBe(0);
+  });
 });

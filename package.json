@@ -19,6 +19,7 @@
     "db:generate": "pnpm --filter @clausecite/core db:generate",
     "db:migrate": "pnpm --filter @clausecite/core build && pnpm --filter @clausecite/core db:migrate",
     "smoke:models": "node --env-file=.env scripts/smoke-models.ts",
+    "reembed": "node --env-file-if-exists=.env scripts/reembed.ts",
     "fixtures:pdf": "node scripts/make-fixture-pdf.ts"
   },
   "devDependencies": {

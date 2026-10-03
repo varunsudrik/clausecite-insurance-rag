@@ -19,6 +19,9 @@ import {
   type ApiConfig,
 } from '../infra/tokens.js';
 
+/** Spec §7: a query embedding gets 5 s; a hung provider call must not hold the request open. */
+const EMBED_TIMEOUT_MS = 5_000;
+
 export interface RunOptions {
   query: string;
   documentIds?: string[];
@@ -44,7 +47,7 @@ export class RetrievalService {
       this.models.embedding,
       this.models.ids.embedding,
       { get: (k) => this.cache.get(k), set: (k, v, ttl) => this.cache.set(k, v, 'EX', ttl) },
-      { onHit: () => (embeddingCacheHit = true) },
+      { timeoutMs: EMBED_TIMEOUT_MS, onHit: () => (embeddingCacheHit = true) },
     );
     const result = await retrieve(
       {

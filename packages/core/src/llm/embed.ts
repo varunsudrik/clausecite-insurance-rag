@@ -23,7 +23,17 @@ export async function embedTexts(
   return { embeddings, tokens };
 }
 
-export async function embedQuery(model: EmbeddingModel, value: string): Promise<number[]> {
-  const res = await embed({ model, value, maxRetries: 2 });
+/** `timeoutMs` aborts the embedding call (retries included) once it elapses; unset means no limit. */
+export async function embedQuery(
+  model: EmbeddingModel,
+  value: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<number[]> {
+  const res = await embed({
+    model,
+    value,
+    maxRetries: 2,
+    ...(opts.timeoutMs ? { abortSignal: AbortSignal.timeout(opts.timeoutMs) } : {}),
+  });
   return res.embedding;
 }

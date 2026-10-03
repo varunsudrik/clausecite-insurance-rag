@@ -53,4 +53,23 @@ describe('embedTexts', () => {
     const v = await embedQuery(mockEmbeddingModel(), 'room rent limit');
     expect(v).toHaveLength(1536);
   });
+
+  describe('embedQuery timeout', () => {
+    it('aborts a slow embedding call once timeoutMs elapses', async () => {
+      const model = mockEmbeddingModel(undefined, { delayMs: 200 });
+      const begin = Date.now();
+      await expect(embedQuery(model, 'x', { timeoutMs: 20 })).rejects.toThrow();
+      expect(Date.now() - begin).toBeLessThan(150);
+    });
+
+    it('does not abort when no timeout is given', async () => {
+      const model = mockEmbeddingModel(undefined, { delayMs: 200 });
+      expect(await embedQuery(model, 'x')).toHaveLength(1536);
+    });
+
+    it('does not abort a call that finishes within the timeout', async () => {
+      const model = mockEmbeddingModel(undefined, { delayMs: 20 });
+      expect(await embedQuery(model, 'x', { timeoutMs: 1_000 })).toHaveLength(1536);
+    });
+  });
 });

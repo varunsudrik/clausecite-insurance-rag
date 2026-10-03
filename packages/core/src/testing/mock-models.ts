@@ -14,18 +14,37 @@ export function hashEmbedding(text: string, dims = EMBEDDING_DIMENSIONS): number
   return v.map((x) => x / norm);
 }
 
+/** Resolves after `ms`, or rejects with the signal's reason as soon as it aborts (like a real fetch). */
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 export function mockEmbeddingModel(
   fn: (text: string) => number[] = (t) => hashEmbedding(t),
-  opts: { maxEmbeddingsPerCall?: number } = {},
+  opts: { maxEmbeddingsPerCall?: number; delayMs?: number } = {},
 ) {
   return new MockEmbeddingModelV4({
     modelId: 'mock-embedding',
     maxEmbeddingsPerCall: opts.maxEmbeddingsPerCall ?? 100,
-    doEmbed: async ({ values }) => ({
-      embeddings: values.map((v) => fn(String(v))),
-      usage: { tokens: values.length },
-      warnings: [],
-    }),
+    doEmbed: async ({ values, abortSignal }) => {
+      if (opts.delayMs) await delay(opts.delayMs, abortSignal);
+      return {
+        embeddings: values.map((v) => fn(String(v))),
+        usage: { tokens: values.length },
+        warnings: [],
+      };
+    },
   });
 }
 
