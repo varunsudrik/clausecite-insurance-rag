@@ -3,14 +3,15 @@ import { BrokerUnavailableError, RabbitPublisher } from './rabbit-publisher.js';
 
 const quiet = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
+const loud = () => ({ log: vi.fn(), warn: vi.fn(), error: vi.fn() });
+
 function fakeConnection() {
-  const handlers: { onClose?: () => void } = {};
   const conn = {
     connection: {},
     channel: { checkExchange: vi.fn(async () => ({})) },
     close: vi.fn(async () => undefined),
   };
-  return { conn, handlers };
+  return { conn };
 }
 
 describe('RabbitPublisher', () => {
@@ -153,5 +154,108 @@ describe('RabbitPublisher', () => {
     expect(p.isConnected()).toBe(false);
     await expect(p.ensureConnected()).rejects.toBeInstanceOf(BrokerUnavailableError);
     expect(connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes a connection that resolves after close() was called, and refuses to reconnect', async () => {
+    const late = fakeConnection();
+    let resolve!: (v: unknown) => void;
+    const connect = vi.fn(() => new Promise((r) => (resolve = r)) as never);
+    const p = new RabbitPublisher(connect, quiet);
+    const pending = p.ensureConnected();
+    const closing = p.close();
+    resolve(late.conn);
+    await pending;
+    await closing;
+    expect(late.conn.close).toHaveBeenCalledOnce();
+    expect(p.isConnected()).toBe(false);
+    const after = p.ensureConnected();
+    await expect(after).rejects.toBeInstanceOf(BrokerUnavailableError);
+    await expect(after).rejects.toThrow('publisher closed');
+    expect(connect).toHaveBeenCalledTimes(1);
+  });
+
+  describe('connect diagnostics (logged on state change only)', () => {
+    it('logs the first failure once with its reason, stays quiet on identical repeats, logs recovery once', async () => {
+      const { conn } = fakeConnection();
+      const logger = loud();
+      const refused = () => new Error('ACCESS_REFUSED - Login was refused');
+      const connect = vi
+        .fn()
+        .mockRejectedValueOnce(refused())
+        .mockRejectedValueOnce(refused())
+        .mockRejectedValueOnce(refused())
+        .mockResolvedValueOnce(conn);
+      const p = new RabbitPublisher(connect, logger);
+
+      await expect(p.ensureConnected()).rejects.toBeInstanceOf(BrokerUnavailableError);
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(String(logger.warn.mock.calls[0]![0])).toContain('ACCESS_REFUSED - Login was refused');
+
+      await expect(p.ensureConnected()).rejects.toBeInstanceOf(BrokerUnavailableError);
+      await expect(p.checkHealthy(50)).resolves.toBe(false);
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.log).not.toHaveBeenCalled();
+
+      await expect(p.ensureConnected()).resolves.toBe(conn);
+      expect(logger.log).toHaveBeenCalledOnce();
+      expect(logger.log).toHaveBeenCalledWith('RabbitMQ connected (recovered)');
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('logs again when the failure reason changes', async () => {
+      const logger = loud();
+      const connect = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+        .mockRejectedValueOnce(new Error('PRECONDITION_FAILED - inequivalent arg x-message-ttl'));
+      const p = new RabbitPublisher(connect, logger);
+      await expect(p.ensureConnected()).rejects.toBeInstanceOf(BrokerUnavailableError);
+      await expect(p.ensureConnected()).rejects.toBeInstanceOf(BrokerUnavailableError);
+      expect(logger.warn).toHaveBeenCalledTimes(2);
+      expect(String(logger.warn.mock.calls[1]![0])).toContain('PRECONDITION_FAILED');
+    });
+
+    it('logs a plain first connect as "connected", not "recovered"', async () => {
+      const { conn } = fakeConnection();
+      const logger = loud();
+      await new RabbitPublisher(async () => conn as never, logger).ensureConnected();
+      expect(logger.log).toHaveBeenCalledExactlyOnceWith('RabbitMQ connected');
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('logs a connect timeout once and a failure after losing an established connection', async () => {
+      const first = fakeConnection();
+      const logger = loud();
+      let onClose: (() => void) | undefined;
+      const connect = vi
+        .fn()
+        .mockImplementationOnce(async (cb: () => void) => ((onClose = cb), first.conn))
+        .mockImplementation(() => new Promise(() => undefined));
+      const p = new RabbitPublisher(connect, logger, { connectTimeoutMs: 20 });
+      await p.ensureConnected();
+      onClose?.();
+      expect(logger.warn).toHaveBeenCalledTimes(1); // the close itself
+
+      await expect(p.ensureConnected()).rejects.toBeInstanceOf(BrokerUnavailableError);
+      await expect(p.ensureConnected()).rejects.toBeInstanceOf(BrokerUnavailableError);
+      expect(logger.warn).toHaveBeenCalledTimes(2); // + one "connect failed", not one per attempt
+      expect(String(logger.warn.mock.calls[1]![0])).toContain('connect timed out after 20 ms');
+    });
+
+    it('redacts credentials from URLs in the logged reason and in the thrown error', async () => {
+      const logger = loud();
+      const leaky = new Error('cannot reach amqp://guest:s3cret@rabbit.internal:5672/vhost');
+      const p = new RabbitPublisher(vi.fn().mockRejectedValue(leaky), logger);
+      const error = (await p.ensureConnected().then(
+        () => undefined,
+        (e: unknown) => e,
+      )) as Error;
+      const logged = String(logger.warn.mock.calls[0]![0]);
+      for (const text of [logged, error.message]) {
+        expect(text).toContain('amqp://***@rabbit.internal:5672/vhost');
+        expect(text).not.toContain('s3cret');
+        expect(text).not.toContain('guest');
+      }
+    });
   });
 });

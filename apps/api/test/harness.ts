@@ -49,7 +49,16 @@ export const wordOverlapReranker = (): Reranker =>
   });
 
 export async function startHarness(
-  opts: { models?: Partial<Models>; reranker?: Reranker; env?: Record<string, string> } = {},
+  opts: {
+    models?: Partial<Models>;
+    reranker?: Reranker;
+    env?: Record<string, string>;
+    /**
+     * Points the app (not `inspect`, which keeps using the real broker container) at another broker
+     * URL, e.g. an unreachable `amqp://127.0.0.1:1` to boot the API without a broker.
+     */
+    rabbitUrl?: string;
+  } = {},
 ): Promise<Harness> {
   const started = await Promise.allSettled([
     startTestDb(),
@@ -98,7 +107,7 @@ export async function startHarness(
     Object.assign(process.env, {
       DATABASE_URL: pg.url,
       REDIS_URL: redisC.getConnectionUrl(),
-      RABBITMQ_URL: mq.getAmqpUrl(),
+      RABBITMQ_URL: opts.rabbitUrl ?? mq.getAmqpUrl(),
       STORAGE_DIR: storageDir,
       OPENROUTER_API_KEY: 'test-key',
       JWT_SECRET: 'x'.repeat(40),

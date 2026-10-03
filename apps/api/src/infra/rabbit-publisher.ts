@@ -10,10 +10,17 @@ type Connect = (onClose: () => void) => Promise<RabbitConnection>;
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 5000;
 
-/** A refused connection surfaces as an AggregateError with an empty message but a `code`. */
+/** `scheme://user:pass@host` becomes `scheme://***@host`: broker URLs carry credentials. */
+const redactCredentials = (text: string): string =>
+  text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi, '$1***@');
+
+/**
+ * A short, log-safe reason. A refused connection surfaces as an AggregateError with an empty message
+ * but a `code`; any URL in the text has its credentials stripped.
+ */
 const reasonOf = (err: unknown): string => {
   const { message, code } = (err ?? {}) as { message?: string; code?: string };
-  return message || code || String(err);
+  return redactCredentials(message || code || String(err));
 };
 
 /**
@@ -26,6 +33,8 @@ export class RabbitPublisher {
   private conn: RabbitConnection | null = null;
   private connecting: Promise<RabbitConnection> | null = null;
   private closed = false;
+  /** Reason of the last connect failure that was logged; null once a connect succeeds. */
+  private lastFailure: string | null = null;
 
   constructor(
     private readonly connect: Connect,
@@ -72,14 +81,21 @@ export class RabbitPublisher {
         }),
       ]);
       this.conn = opened;
-      this.logger.log('RabbitMQ connected');
+      this.logger.log(
+        this.lastFailure === null ? 'RabbitMQ connected' : 'RabbitMQ connected (recovered)',
+      );
+      this.lastFailure = null;
       return opened;
     } catch (err) {
+      const reason = reasonOf(err);
+      // Only on a state change: a broker that stays down is polled by every health check and upload.
+      if (reason !== this.lastFailure) {
+        this.lastFailure = reason;
+        this.logger.warn(`RabbitMQ connect failed: ${reason}`);
+      }
       // An attempt that outlives its timeout must not leave an orphan connection behind.
       void attempt?.then((late) => late.close()).catch(() => undefined);
-      throw new BrokerUnavailableError(`RabbitMQ unavailable: ${reasonOf(err)}`, {
-        cause: err,
-      });
+      throw new BrokerUnavailableError(`RabbitMQ unavailable: ${reason}`, { cause: err });
     } finally {
       clearTimeout(timer);
     }
