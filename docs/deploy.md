@@ -2,7 +2,7 @@
 
 One VM runs the whole stack with Docker Compose (`docker-compose.prod.yml`): Caddy (automatic HTTPS) in front of the web app and the API, plus Postgres/pgvector, RabbitMQ, two Redis instances, the worker and a daily `pg_dump` backup job.
 
-GitHub Actions does the rest. `ci.yml` runs on every push and pull request. When CI succeeds on `main`, `deploy.yml` builds the `api`, `worker` and `web` images, pushes them to GHCR tagged with the commit sha and `latest`, copies `docker-compose.prod.yml` and `docker/Caddyfile` to the server over SSH, runs `docker compose pull` and `up -d --wait` there, and finally polls `https://<domain>/api/health`. It does nothing until the repository variable `DEPLOY_ENABLED` is `true`.
+GitHub Actions does the rest. `ci.yml` runs on every push and pull request. When CI succeeds on `main`, `deploy.yml` builds the `api`, `worker` and `web` images, pushes them to GHCR tagged with the commit sha and `latest`, copies `docker-compose.prod.yml` and `docker/Caddyfile` to the server over SSH, pulls the three app images, runs `docker compose up -d`, waits for the app services (api, worker, web, Caddy), reloads Caddy so a changed `Caddyfile` takes effect, and finally polls `https://<domain>/api/health`. It does nothing until the repository variable `DEPLOY_ENABLED` is `true`.
 
 Replace `<domain>` and `<server-ip>` below with your own values.
 
@@ -150,11 +150,12 @@ gh workflow run deploy.yml --ref main      # or push to main and let CI trigger 
 gh run watch
 ```
 
-`workflow_dispatch` deploys the commit of the ref you pick, so run it on `main`.
+A manual run only deploys when it is started on `main`; on any other ref the job is skipped. That is accident protection, not a security boundary: anyone with write access can still change the workflow on a branch. A hard boundary needs a GitHub Environment with a deployment-branch policy and environment-scoped secrets (optional hardening).
 
-- The first run takes about five minutes longer than later ones, because `up --wait` waits for the `backup` service's first health check. Later deploys do not wait for it again: that container is not recreated.
+- The remote step pulls only the `api`, `worker` and `web` images (so floating infrastructure tags such as Postgres are never swapped under you), runs `up -d --remove-orphans` to create or update everything, then waits up to 10 minutes for `api worker web caddy`. Only `api` and `web` have health checks; `worker` and `caddy` have none, so for them the wait only proves the container is running.
+- A deploy never waits on `backup`, and nothing in it checks the backup either, so a stale or failing backup does not block a hotfix and does not alert you. Look at it yourself (step 11).
+- After the wait the workflow runs `caddy reload`, which applies a changed `docker/Caddyfile` (a no-op if it is unchanged).
 - The smoke step then polls `https://<domain>/api/health` for up to three minutes and passes only on HTTP 200. The first certificate is issued while it polls.
-- `up --wait` waits for every service that has a health check (`backup` included) and fails the deploy, after 10 minutes at most, if one does not become healthy.
 - Check by hand with `curl -fsS https://<domain>/api/health`, and open `https://<domain>` in a browser.
 
 ## 9. Load the policies (first ingest)
@@ -165,14 +166,15 @@ Ingest from your laptop, not from the server. Do not run `pnpm sources:download`
 # on your laptop, in the repository
 pnpm install
 pnpm sources:download
-git diff --stat data/sources.lock.json      # must print nothing: a change means an insurer replaced a PDF
+git diff --stat data/sources.lock.json      # must print nothing: re-downloading unchanged bytes leaves the lock as it is,
+                                            # so any change means an insurer replaced a PDF (or data/sources.json changed)
 
-export ADMIN_EMAIL='<the ADMIN_EMAIL from .env.prod>'
-read -rs -p 'Admin password: ' ADMIN_PASSWORD && export ADMIN_PASSWORD
+# put the production ADMIN_EMAIL and ADMIN_PASSWORD (from .env.prod) in the git-ignored .env at the repo root,
+# in place of the local dev values, then:
 API_URL=https://<domain>/api pnpm sources:ingest
 ```
 
-`sources:ingest` verifies each PDF against the lockfile hash before it uploads it, logs in as the admin, then waits until every document is `ready` or `failed` and prints a table. It exits non-zero if any document failed, and it refuses to send the admin credentials to a plain `http://` URL unless the host is `localhost`, `127.0.0.1` or `[::1]`. Variables you set in the shell win over a local `.env`. Re-running is safe: documents already ingested are deduplicated.
+`sources:ingest` verifies each PDF against the lockfile hash before it uploads it, logs in as the admin, then waits until every document is `ready` or `failed` and prints a table. It exits non-zero if any document failed, and it refuses to send the admin credentials to a plain `http://` URL unless the host is `localhost`, `127.0.0.1` or `[::1]`. The script loads the git-ignored `.env` for `ADMIN_EMAIL` and `ADMIN_PASSWORD`; an `API_URL` given on the command line wins over one in `.env`. When you are done, put the dev values back so the production password does not stay on disk. Re-running is safe: documents already ingested are deduplicated.
 
 ## 10. Before a public demo (DECISIONS 012)
 
@@ -200,7 +202,7 @@ docker inspect --format '{{.State.Health.Status}}' clausecite-prod-backup-1
 ```
 
 - `backup ok /backups/clausecite-2026-10-03.dump 123456` is a good run. `backup FAILED: pg_dump did not produce a dump; retrying in 300 s` (on stderr) is a failed one; it retries every five minutes and leaves the last good dump alone.
-- The container's health is `healthy` while the newest dump exists, is non-empty and is under 26 hours old, `starting` until its first check passes (about five minutes after the container starts), and `unhealthy` otherwise. Nothing pages you: look at `docker compose ps` now and then, or alert on it.
+- The container's health is `healthy` while the newest dump exists, is non-empty and is under 26 hours old, `starting` until its first check passes (about five minutes after the container starts), and `unhealthy` otherwise. Nothing pages you, and a deploy neither waits on nor checks the backup: look at `docker compose ... ps backup` (it should say `healthy`) and the logs now and then, or alert on it.
 
 **Dumps stay on the server and are not encrypted.** They are not in a Docker volume: the compose file bind-mounts `BACKUP_DIR`, by default `./backups`, which is `/opt/clausecite/backups`. The files are root-owned with mode 600, so a plain `scp` as `deploy` cannot read them. Copy them off-host with `docker cp` (no sudo needed), from your laptop or any machine that is always on:
 
@@ -236,7 +238,8 @@ rm ./clausecite-2026-10-03.dump
 # the PDFs from their archive, before the api starts again
 docker run --rm -v clausecite-prod_pdfs:/d -v "$PWD":/in:ro alpine tar xzf /in/pdfs-2026-10-03.tgz -C /d
 
-dc up -d --wait
+dc up -d
+dc up -d --wait --wait-timeout 600 api worker web caddy
 ```
 
 Open a citation afterwards to confirm the PDF renders. Try this once on a scratch server before you depend on it.
@@ -250,15 +253,23 @@ Open a citation afterwards to confirm the PDF renders. Try this once on a scratc
 ```bash
 cd /opt/clausecite
 export IMAGE_TAG=<older commit sha>
-docker compose -f docker-compose.prod.yml --env-file .env.prod pull
-docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --wait
+docker compose -f docker-compose.prod.yml --env-file .env.prod pull api worker web
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --remove-orphans
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --wait --wait-timeout 600 api worker web caddy
 ```
 
 Migrations only move forward, so rolling back across one needs a database restore (step 12) as well. The next deploy moves the stack forward again.
 
-**Change `.env.prod`.** Edit it on the server, then `up -d --force-recreate api worker` (same compose flags as above).
+**Change `.env.prod`.** Edit it on the server, then recreate api and worker. Export the sha that is running first: `.env.prod` only holds `IMAGE_TAG=latest`, and without the export the recreated containers would switch to `latest`. `--no-deps` leaves Postgres and the rest alone, and naming only `api worker` means the wait never involves `backup`:
 
-**Rotate `JWT_SECRET`.** Generate a new one with `openssl rand -hex 32`, put it in `.env.prod`, and recreate api and worker as above. There is no overlap period: every existing token stops verifying at once, which logs everyone out. The admin has to log in again, and guests are issued a fresh token on their next request.
+```bash
+cd /opt/clausecite
+export IMAGE_TAG=$(docker inspect --format '{{.Config.Image}}' clausecite-prod-api-1 | sed 's/.*://')
+echo "$IMAGE_TAG"      # the commit sha currently deployed
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --force-recreate --no-deps --wait --wait-timeout 600 api worker
+```
+
+**Rotate `JWT_SECRET`.** Generate a new one with `openssl rand -hex 32`, put it in `.env.prod`, and recreate api and worker as in "Change `.env.prod`". There is no overlap period: every existing token stops verifying at once, which logs everyone out. The admin has to log in again, and guests are issued a fresh token on their next request.
 
 **PgBouncer.** None is part of this stack, and a PgBouncer in transaction mode would break it: the API and worker connect with the `options` startup parameter (`-c hnsw.iterative_scan=relaxed_order`, set in `packages/core/src/db/client.ts`), which PgBouncer in transaction mode rejects. If you add a pooler, use session pooling, or set the parameter on the role instead and drop it from the client:
 

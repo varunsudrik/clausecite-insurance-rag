@@ -1,7 +1,7 @@
 // Usage: pnpm sources:download
 // Downloads every policy in data/sources.json to data/pdfs/sources/<slug>.pdf (git-ignored) and
 // records sha256 + size in data/sources.lock.json (committed). Re-running skips files that are
-// already on disk with the locked hash. A failing source is reported and skipped; exit code 1 if any failed.
+// already on disk with the locked hash; a re-download with the same hash keeps the locked retrievedAt. A failing source is reported and skipped; exit code 1 if any failed.
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import {

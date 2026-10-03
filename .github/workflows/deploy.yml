@@ -19,7 +19,7 @@ permissions:
 jobs:
   deploy:
     name: Build images and deploy
-    if: vars.DEPLOY_ENABLED == 'true' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    if: vars.DEPLOY_ENABLED == 'true' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # One deploy at a time; a running deploy is never cancelled half way through.
@@ -28,7 +28,7 @@ jobs:
       cancel-in-progress: false
     env:
       # Under workflow_run, github.sha is the default branch's latest commit, not necessarily the one CI
-      # tested; head_sha is. workflow_dispatch deploys the commit of the ref it was started on.
+      # tested; head_sha is. workflow_dispatch only runs on main (job `if`) and deploys that ref's commit.
       DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
     steps:
       # `branches: [main]` matches the triggering run's branch *name*, so a pull request from a fork's own
@@ -186,12 +186,20 @@ jobs:
           scp "${ssh_opts[@]}" docker/Caddyfile "$target:$DEPLOY_PATH/docker/Caddyfile"
 
           # IMAGE_TAG exported here overrides the IMAGE_TAG in .env.prod (the shell wins over --env-file).
-          # A non-zero exit from pull or up --wait (an unhealthy service) fails this step and the job.
+          # 1. pull only the three app images, so floating infra tags (postgres, caddy, ...) never get
+          #    recreated by a deploy.
+          # 2. up -d creates or updates everything, backup included, without waiting on any health check.
+          # 3. --wait on the app services only: a stale or unhealthy backup must not block a deploy.
+          #    worker and caddy have no healthcheck, so for them --wait only proves "running".
+          # 4. reload Caddy so the freshly copied docker/Caddyfile takes effect (a no-op if unchanged).
+          # A non-zero exit from any of these fails this step and the job.
           # shellcheck disable=SC2029
           ssh "${ssh_opts[@]}" "$target" \
             "cd $q_path && export IMAGE_TAG=$q_tag \
-              && docker compose -f docker-compose.prod.yml --env-file .env.prod pull \
-              && docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --remove-orphans --wait --wait-timeout 600 \
+              && docker compose -f docker-compose.prod.yml --env-file .env.prod pull api worker web \
+              && docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --remove-orphans \
+              && docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --wait --wait-timeout 600 api worker web caddy \
+              && docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T caddy caddy reload --config /etc/caddy/Caddyfile \
               && docker compose -f docker-compose.prod.yml --env-file .env.prod ps"
 
       - name: Remove SSH key material

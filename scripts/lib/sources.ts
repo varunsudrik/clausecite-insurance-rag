@@ -57,9 +57,18 @@ export function isPdf(bytes: Uint8Array): boolean {
 export const sha256Hex = (bytes: Uint8Array): string =>
   createHash('sha256').update(bytes).digest('hex');
 
-/** Returns a new lock with `entry` replacing any entry with the same slug, sorted by slug. */
+/**
+ * Returns a new lock with `entry` replacing any entry with the same slug, sorted by slug.
+ * When the replaced entry has the same sha256, its `retrievedAt` is kept: downloading the same bytes
+ * again (a fresh clone has no PDFs on disk) must not make the committed lockfile look changed.
+ */
 export function mergeLock(existing: readonly LockEntry[], entry: LockEntry): LockEntry[] {
-  return [...existing.filter((e) => e.slug !== entry.slug), entry].sort((a, b) =>
+  const previous = existing.find((e) => e.slug === entry.slug);
+  const next =
+    previous && previous.sha256 === entry.sha256
+      ? { ...entry, retrievedAt: previous.retrievedAt }
+      : entry;
+  return [...existing.filter((e) => e.slug !== entry.slug), next].sort((a, b) =>
     a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0,
   );
 }

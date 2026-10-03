@@ -97,6 +97,42 @@ describe('mergeLock', () => {
     expect(merged[1]).toEqual(existing[1]);
     expect(existing[0]?.bytes).toBe(10); // input not mutated
   });
+
+  it('keeps retrievedAt when the re-downloaded bytes have the same sha256', () => {
+    const existing = [lock('a-policy', { retrievedAt: '2026-10-03T00:00:00.000Z' })];
+    const merged = mergeLock(
+      existing,
+      lock('a-policy', { retrievedAt: '2026-11-01T09:30:00.000Z' }),
+    );
+    expect(merged).toEqual(existing);
+  });
+
+  it('takes the new retrievedAt when the sha256 changed or the slug is new', () => {
+    const changed = mergeLock(
+      [lock('a-policy', { retrievedAt: '2026-10-03T00:00:00.000Z' })],
+      lock('a-policy', { sha256: 'b'.repeat(64), retrievedAt: '2026-11-01T09:30:00.000Z' }),
+    );
+    expect(changed[0]).toMatchObject({
+      sha256: 'b'.repeat(64),
+      retrievedAt: '2026-11-01T09:30:00.000Z',
+    });
+    const added = mergeLock([], lock('a-policy', { retrievedAt: '2026-11-01T09:30:00.000Z' }));
+    expect(added[0]?.retrievedAt).toBe('2026-11-01T09:30:00.000Z');
+  });
+
+  it('keeps the same-hash entry otherwise up to date (a moved url is recorded)', () => {
+    const merged = mergeLock(
+      [lock('a-policy', { retrievedAt: '2026-10-03T00:00:00.000Z' })],
+      lock('a-policy', {
+        url: 'https://example.com/moved.pdf',
+        retrievedAt: '2026-11-01T09:30:00.000Z',
+      }),
+    );
+    expect(merged[0]).toMatchObject({
+      url: 'https://example.com/moved.pdf',
+      retrievedAt: '2026-10-03T00:00:00.000Z',
+    });
+  });
 });
 
 describe('lockSchema', () => {
