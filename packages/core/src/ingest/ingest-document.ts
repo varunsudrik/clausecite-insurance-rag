@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import type { EmbeddingModel } from 'ai';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { chunks, documents } from '../db/schema.js';
+import { chunks, documents, EMBEDDING_DIMENSIONS } from '../db/schema.js';
 import { embedTexts } from '../llm/embed.js';
 import { chunkClauses } from './chunker.js';
 import { IngestError } from './errors.js';
@@ -57,7 +57,17 @@ export async function ingestDocument(deps: IngestDeps, documentId: string): Prom
     throw new IngestError('EMBEDDING_FAILED', `embedding failed: ${(err as Error).message}`, { cause: err });
   }
 
+  assertValidEmbeddings(embedded.embeddings, drafts.length);
+
   await db.transaction(async (tx) => {
+    // Serialize overlapping ingests of the same document: without the row lock, two transactions can
+    // both delete (seeing no chunks) and then both insert, leaving duplicate chunks.
+    const locked = await tx
+      .select({ id: documents.id })
+      .from(documents)
+      .where(eq(documents.id, documentId))
+      .for('update');
+    if (locked.length === 0) throw new IngestError('DOCUMENT_NOT_FOUND', `document ${documentId} not found`);
     await tx.delete(chunks).where(eq(chunks.documentId, documentId));
     if (drafts.length > 0) {
       await tx.insert(chunks).values(
@@ -77,6 +87,23 @@ export async function ingestDocument(deps: IngestDeps, documentId: string): Prom
   });
 
   return { pageCount: pages.length, chunkCount: drafts.length, embeddingTokens: embedded.tokens };
+}
+
+/** A wrong-dimension EMBEDDING_MODEL is a misconfiguration: fail fast and non-retryably, before touching chunks. */
+function assertValidEmbeddings(embeddings: number[][], expectedCount: number): void {
+  if (embeddings.length !== expectedCount) {
+    throw new IngestError(
+      'EMBEDDING_INVALID',
+      `expected ${expectedCount} embeddings, got ${embeddings.length}`,
+    );
+  }
+  const badIndex = embeddings.findIndex((e) => e.length !== EMBEDDING_DIMENSIONS);
+  if (badIndex !== -1) {
+    throw new IngestError(
+      'EMBEDDING_INVALID',
+      `expected ${EMBEDDING_DIMENSIONS}-dimension embeddings, got ${embeddings[badIndex].length} for chunk ${badIndex}`,
+    );
+  }
 }
 
 export function describeError(err: unknown): string {

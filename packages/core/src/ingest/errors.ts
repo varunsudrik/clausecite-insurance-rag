@@ -4,7 +4,8 @@ export type IngestErrorCode =
   | 'PDF_PARSE_FAILED'
   | 'NO_TEXT_LAYER'
   | 'TOO_MANY_PAGES'
-  | 'EMBEDDING_FAILED';
+  | 'EMBEDDING_FAILED'
+  | 'EMBEDDING_INVALID';
 
 const RETRYABLE: ReadonlySet<IngestErrorCode> = new Set(['EMBEDDING_FAILED']);
 
