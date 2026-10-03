@@ -12,6 +12,9 @@ export function createDb(url: string, max = 10): DbHandle {
   const pool = new pg.Pool({
     connectionString: url,
     max,
+    // Fail a checkout instead of waiting forever when the pool is saturated or the host is
+    // unreachable (without this, node-postgres waits indefinitely and requests hang).
+    connectionTimeoutMillis: 10_000,
     // pgvector >= 0.8: keep scanning the HNSW graph when WHERE filters remove candidates.
     // Sent as a connection startup parameter, so it is in effect before the first query and
     // needs no extra round trip (a fire-and-forget SET in a 'connect' hook would race with it).

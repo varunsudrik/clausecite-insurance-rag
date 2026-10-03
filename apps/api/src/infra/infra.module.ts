@@ -26,6 +26,8 @@ import {
 import { Redis } from 'ioredis';
 import { API_ENV, DATABASE, MODELS, RABBIT, REDIS, RERANKER, type ApiConfig } from './tokens.js';
 
+const logger = new Logger('Infra');
+
 @Injectable()
 class InfraLifecycle implements OnApplicationShutdown {
   constructor(
@@ -34,13 +36,21 @@ class InfraLifecycle implements OnApplicationShutdown {
     @Inject(RABBIT) private readonly rabbit: RabbitConnection,
   ) {}
   async onApplicationShutdown() {
-    await this.rabbit.close();
-    await this.redis.quit().catch(() => undefined);
-    await this.database.pool.end();
+    // Concurrent and independent: one slow or failing dependency must not keep the others open.
+    const results = await Promise.allSettled([
+      this.rabbit.close(),
+      this.redis.quit().catch(() => this.redis.disconnect()),
+      this.database.pool.end(),
+    ]);
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        logger.warn(
+          `shutdown: ${result.reason instanceof Error ? result.reason.message : result.reason}`,
+        );
+      }
+    }
   }
 }
-
-const logger = new Logger('Infra');
 
 @Global()
 @Module({
@@ -66,7 +76,13 @@ const logger = new Logger('Infra');
     {
       provide: REDIS,
       inject: [API_ENV],
-      useFactory: (env: ApiConfig) => new Redis(env.REDIS_URL, { maxRetriesPerRequest: 2 }),
+      useFactory: (env: ApiConfig) => {
+        const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: 2, commandTimeout: 5000 });
+        // ioredis keeps retrying on its own; without a listener each failure is printed as an
+        // "Unhandled error event".
+        redis.on('error', (err: Error) => logger.warn(`redis error: ${err.message}`));
+        return redis;
+      },
     },
     {
       provide: RABBIT,
