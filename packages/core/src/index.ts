@@ -9,3 +9,5 @@ export * from './llm/rerank.js';
 export * from './ingest/errors.js';
 export * from './ingest/pdf-lines.js';
 export * from './ingest/structure.js';
+export * from './ingest/tokens.js';
+export * from './ingest/chunker.js';
