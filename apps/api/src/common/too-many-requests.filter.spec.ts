@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { TooManyRequestsFilter } from './too-many-requests.filter.js';
 
 function setup() {
-  const response = { setHeader: vi.fn() };
+  const response = { headersSent: false, setHeader: vi.fn() };
   const adapter = { reply: vi.fn(), end: vi.fn(), isHeadersSent: vi.fn(() => false) };
   const host = {
     getArgByIndex: (i: number) => (i === 1 ? response : undefined),
@@ -49,5 +49,18 @@ describe('TooManyRequestsFilter', () => {
 
     filter.catch(new HttpException({ retryAfterSeconds: 5 }, HttpStatus.SERVICE_UNAVAILABLE), host);
     expect(response.setHeader).not.toHaveBeenCalled();
+  });
+
+  it('does not set Retry-After once the headers are already sent (429 thrown mid-stream)', () => {
+    const { response, adapter, host, filter } = setup();
+    response.headersSent = true;
+    adapter.isHeadersSent.mockReturnValue(true);
+    const body = { message: 'Daily token budget exhausted', retryAfterSeconds: 42 };
+    expect(() =>
+      filter.catch(new HttpException(body, HttpStatus.TOO_MANY_REQUESTS), host),
+    ).not.toThrow();
+    expect(response.setHeader).not.toHaveBeenCalled();
+    expect(adapter.reply).not.toHaveBeenCalled();
+    expect(adapter.end).toHaveBeenCalledWith(response);
   });
 });
