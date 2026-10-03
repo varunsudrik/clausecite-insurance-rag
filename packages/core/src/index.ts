@@ -14,3 +14,5 @@ export * from './ingest/chunker.js';
 export * from './ingest/ingest-document.js';
 export * from './queue/topology.js';
 export * from './queue/rabbit.js';
+export * from './retrieval/search.js';
+export * from './retrieval/retrieve.js';
