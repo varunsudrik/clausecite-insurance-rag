@@ -18,3 +18,7 @@ export * from './queue/rabbit.js';
 export * from './retrieval/search.js';
 export * from './retrieval/retrieve.js';
 export * from './retrieval/clauses.js';
+export * from './generation/prompts.js';
+export * from './generation/citations.js';
+export * from './generation/rewrite.js';
+export * from './types/chat.js';
