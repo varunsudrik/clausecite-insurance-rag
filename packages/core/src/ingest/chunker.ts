@@ -96,19 +96,21 @@ export function chunkClauses(
   const merged: Piece[] = [];
   for (const p of pieces) {
     const prev = merged[merged.length - 1];
-    const canMerge =
+    const mergeable =
       prev &&
       !p.split &&
       !prev.split &&
       p.tokens < opts.minTokens &&
       (prev.tokens < opts.minTokens || prev.clauseIds.length > 1) &&
-      samePath(prev.sectionPath, p.sectionPath) &&
-      prev.tokens + p.tokens <= opts.maxTokens;
-    if (canMerge) {
+      samePath(prev.sectionPath, p.sectionPath);
+    // Count the joined text itself: the "\n\n" separator and BPE merges at the join make sums inexact.
+    const joined = mergeable ? `${prev.content}\n\n${p.content}` : '';
+    const joinedTokens = mergeable ? countTokens(joined) : 0;
+    if (mergeable && joinedTokens <= opts.maxTokens) {
       prev.clauseIds.push(...p.clauseIds);
       prev.titles.push(...p.titles);
-      prev.content = `${prev.content}\n\n${p.content}`;
-      prev.tokens = countTokens(prev.content);
+      prev.content = joined;
+      prev.tokens = joinedTokens;
       prev.pageStart = Math.min(prev.pageStart, p.pageStart);
       prev.pageEnd = Math.max(prev.pageEnd, p.pageEnd);
     } else {

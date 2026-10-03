@@ -20,6 +20,11 @@ describe('countTokens', () => {
   it('counts cl100k tokens', () => {
     expect(countTokens('hello world')).toBe(2);
   });
+
+  it('treats special-token literals as plain text instead of throwing', () => {
+    expect(() => countTokens('see <|endoftext|> here')).not.toThrow();
+    expect(countTokens('see <|endoftext|> here')).toBeGreaterThan(0);
+  });
 });
 
 describe('splitText', () => {
@@ -78,6 +83,23 @@ describe('chunkClauses', () => {
     expect(out[1]).toMatchObject({ clauseId: 'C.2', pageStart: 2, pageEnd: 3 });
     expect(out[1].contentForEmbedding.split('\n')[0]).toBe('Sample Health Shield (Acme) › Section C: Exclusions');
     expect(out[1].content).toBe('C.2 Title\nShort rule.\n\nC.3 Title\nAnother short rule.');
+  });
+
+  it('chunks clauses containing special-token literals without throwing', () => {
+    const out = chunkClauses([clause('C.9', 'The literal <|endoftext|> may appear in extracted text.')], meta);
+    expect(out).toHaveLength(1);
+    expect(out[0].content).toContain('<|endoftext|>');
+    expect(out[0].tokenCount).toBeGreaterThan(0);
+  });
+
+  it('never lets a merged group exceed maxTokens once the separator is counted', () => {
+    const rules = (n: number, tail = '') => `${Array.from({ length: n }, (_, i) => `rule ${i}`).join(' ')}${tail}`;
+    const opts = { maxTokens: 60, overlapTokens: 10, minTokens: 40 };
+    const clauses = [clause('A.1', rules(1)), clause('A.2', rules(6, ' limit')), clause('A.3', rules(7, ' limit'))];
+    const out = chunkClauses(clauses, meta, opts);
+    expect(out.some((c) => c.clauseIds.length > 1)).toBe(true); // the cap is exercised on a real merge
+    for (const c of out) expect(countTokens(c.content)).toBeLessThanOrEqual(opts.maxTokens);
+    expect(out.flatMap((c) => c.clauseIds)).toEqual(['A.1', 'A.2', 'A.3']);
   });
 
   it('covers every fixture clause exactly once', async () => {
