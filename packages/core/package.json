@@ -26,6 +26,14 @@
     "db:migrate": "node --env-file-if-exists=../../.env dist/db/migrate.js"
   },
   "dependencies": {
+    "@testcontainers/postgresql": "^12.2.0",
+    "drizzle-orm": "^0.45.3",
+    "pg": "^8.23.1",
+    "testcontainers": "^12.2.0",
     "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1",
+    "drizzle-kit": "^0.31.11"
   }
 }
