@@ -8,11 +8,14 @@ import type { PublicDocument } from '@/lib/types';
  */
 export function PolicyScope({
   documents,
+  unavailable = false,
   value,
   onChange,
 }: {
   /** Only documents that can be searched (status "ready"). */
   documents: PublicDocument[];
+  /** The list could not be loaded: say so instead of claiming there are no ready policies. */
+  unavailable?: boolean;
   value: string[] | undefined;
   onChange: (next: string[] | undefined) => void;
 }) {
@@ -75,7 +78,11 @@ export function PolicyScope({
             </span>
           </label>
         ))}
-        {documents.length === 0 && <p className="text-xs text-zinc-500">No ready policies yet.</p>}
+        {unavailable ? (
+          <p className="text-xs text-red-600 dark:text-red-400">Policies could not be loaded.</p>
+        ) : (
+          documents.length === 0 && <p className="text-xs text-zinc-500">No ready policies yet.</p>
+        )}
       </fieldset>
     </details>
   );

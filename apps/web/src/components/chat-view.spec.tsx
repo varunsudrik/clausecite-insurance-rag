@@ -77,23 +77,32 @@ function chatStream(conversationId = 'conv-1') {
   });
 }
 
-function setup(chat: () => Response | Promise<Response> = () => chatStream()) {
-  localStorage.setItem(
-    'clausecite.session',
-    JSON.stringify({
-      token: 'tok',
-      role: 'guest',
-      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
-    }),
-  );
+type Overrides = {
+  /** The /documents answer (default: two ready policies and a failed one). */
+  documents?: () => Response | Promise<Response>;
+  /** Start without a stored session, answering POST /auth/guest with this. */
+  guest?: () => Response | Promise<Response>;
+};
+
+function setup(chat: () => Response | Promise<Response> = () => chatStream(), o: Overrides = {}) {
+  if (!o.guest) {
+    localStorage.setItem(
+      'clausecite.session',
+      JSON.stringify({
+        token: 'tok',
+        role: 'guest',
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      }),
+    );
+  }
   const chatBodies: Record<string, unknown>[] = [];
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/auth/guest') && o.guest) return o.guest();
     if (url.endsWith('/documents')) {
-      return json(200, [
-        doc('a', 'Alpha Policy'),
-        doc('b', 'Beta Policy'),
-        doc('f', 'Broken', 'failed'),
-      ]);
+      return (
+        o.documents?.() ??
+        json(200, [doc('a', 'Alpha Policy'), doc('b', 'Beta Policy'), doc('f', 'Broken', 'failed')])
+      );
     }
     if (url.endsWith('/chat')) {
       chatBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
@@ -187,6 +196,49 @@ describe('ChatView', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       "You've hit the limit — try again in 42s",
     );
+  });
+
+  it('says the policy list could not be loaded instead of "No ready policies yet."', async () => {
+    const { user } = setup(undefined, {
+      documents: () => json(500, { statusCode: 500, message: 'Internal server error' }),
+    });
+    render(<ChatView />);
+    expect(await screen.findByText(/policy list could not be loaded/i)).toHaveTextContent(
+      'Internal server error',
+    );
+    await user.click(screen.getByText(/all policies/i, { selector: 'summary' }));
+    expect(screen.queryByText(/no ready policies yet/i)).toBeNull();
+    expect(screen.getByText(/policies could not be loaded/i)).toBeInTheDocument();
+    // Asking across all policies still works.
+    await ask(user, 'q');
+    expect(await screen.findByRole('button', { name: /source 1/i })).toBeInTheDocument();
+  });
+
+  it('still says "No ready policies yet." when the list loaded and is empty', async () => {
+    const { user } = setup(undefined, { documents: () => json(200, []) });
+    render(<ChatView />);
+    await user.click(screen.getByText(/all policies/i, { selector: 'summary' }));
+    expect(await screen.findByText(/no ready policies yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/could not be loaded/i)).toBeNull();
+  });
+
+  it('shows the wait time when the session itself is rate-limited', async () => {
+    const { chatBodies, user } = setup(undefined, {
+      guest: () =>
+        json(429, { statusCode: 429, message: 'Rate limit exceeded', retryAfterSeconds: 840 }),
+    });
+    render(<ChatView />);
+    // The scope menu's policy list needs a session too: it reports the same wait.
+    expect(await screen.findByText(/policy list could not be loaded/i)).toHaveTextContent(
+      'Try again in 14 min',
+    );
+    await ask(user, 'q');
+    // The transport's ensureSession threw before any /chat request: the banner still carries the wait.
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Rate limit exceeded. Try again in 14 min.',
+    );
+    expect(chatBodies).toHaveLength(0);
+    expect(screen.getByRole('textbox')).toHaveValue('q');
   });
 
   it('keeps the scope per request: narrowing to one policy, then back to all policies', async () => {

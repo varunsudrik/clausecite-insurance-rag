@@ -72,6 +72,29 @@ describe('describeChatError', () => {
       /could not reach the server/i,
     );
   });
+
+  // ensureSession runs inside the transport, so a rate-limited /auth/guest reaches useChat as the
+  // ApiError itself: its message is plain text (no JSON body to parse) and the wait is a property.
+  it('keeps the wait time of an ApiError thrown before the chat request (a rate-limited session)', () => {
+    expect(describeChatError(new ApiError('Rate limit exceeded', 429, null, 840))).toBe(
+      'Rate limit exceeded. Try again in 14 min.',
+    );
+    expect(describeChatError(new ApiError('Rate limit exceeded', 429, null, 42))).toBe(
+      'Rate limit exceeded. Try again in 42 s.',
+    );
+  });
+
+  it('passes an ApiError without a wait time through', () => {
+    expect(describeChatError(new ApiError('auth failed (500)', 500, null))).toBe(
+      'auth failed (500)',
+    );
+  });
+
+  it('reads the wait from any error that carries a numeric retryAfterSeconds', () => {
+    expect(
+      describeChatError(Object.assign(new Error('Slow down'), { retryAfterSeconds: 7200 })),
+    ).toBe('Slow down. Try again in 2 h.');
+  });
 });
 
 describe('a conversation the API no longer knows', () => {

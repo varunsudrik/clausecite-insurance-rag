@@ -77,6 +77,21 @@ describe('PolicyScope', () => {
     expect(onChange).toHaveBeenLastCalledWith(undefined);
   });
 
+  it('tells an empty list from one that could not be loaded', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <PolicyScope documents={[]} value={undefined} onChange={vi.fn()} />,
+    );
+    await user.click(screen.getByText(/all policies/i, { selector: 'summary' }));
+    expect(screen.getByText('No ready policies yet.')).toBeInTheDocument();
+
+    rerender(<PolicyScope documents={[]} unavailable value={undefined} onChange={vi.fn()} />);
+    expect(screen.queryByText('No ready policies yet.')).toBeNull();
+    expect(screen.getByText('Policies could not be loaded.')).toBeInTheDocument();
+    // "All policies" stays selectable: a question without a scope still works.
+    expect(screen.getByRole('radio', { name: /all policies/i })).toBeChecked();
+  });
+
   it('closes on an outside click and on Escape', async () => {
     const user = userEvent.setup();
     const { container } = render(<Harness onChange={vi.fn()} />);

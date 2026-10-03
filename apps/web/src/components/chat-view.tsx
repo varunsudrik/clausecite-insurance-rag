@@ -3,7 +3,7 @@ import { useChat } from '@ai-sdk/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch } from '@/lib/api';
 import { createChatTransport, type ChatRequestState } from '@/lib/chat-transport';
-import { describeChatError, isConversationGone } from '@/lib/errors';
+import { describeChatError, describeError, isConversationGone } from '@/lib/errors';
 import { ensureSession } from '@/lib/session';
 import type { ClauseCiteUIMessage, PublicDocument, SourceRef } from '@/lib/types';
 import { AssistantMessage } from './assistant-message';
@@ -24,6 +24,8 @@ export function ChatView({
   onNewChat?: () => void;
 }) {
   const [documents, setDocuments] = useState<PublicDocument[]>([]);
+  /** Why the policy list could not be loaded (kept apart from "no ready policies yet"). */
+  const [documentsError, setDocumentsError] = useState<string>();
   const [scope, setScope] = useState<string[] | undefined>();
   const [input, setInput] = useState('');
   // Read by the transport at send time, so the scope and conversation always reflect the latest UI state.
@@ -56,7 +58,7 @@ export function ChatView({
     ensureSession()
       .then(() => apiFetch<PublicDocument[]>('/documents'))
       .then((docs) => live && setDocuments(docs))
-      .catch(() => live && setDocuments([]));
+      .catch((e: unknown) => live && setDocumentsError(describeError(e)));
     return () => {
       live = false;
     };
@@ -108,6 +110,7 @@ export function ChatView({
       <div className="flex items-center justify-between gap-2">
         <PolicyScope
           documents={documents.filter((d) => d.status === 'ready')}
+          unavailable={documentsError !== undefined}
           value={scope}
           onChange={changeScope}
         />
@@ -119,6 +122,12 @@ export function ChatView({
           New chat
         </button>
       </div>
+
+      {documentsError !== undefined && (
+        <p role="status" className="text-sm text-red-700 dark:text-red-400">
+          The policy list could not be loaded: {documentsError}
+        </p>
+      )}
 
       <div className="space-y-6">
         {messages.length === 0 && (
