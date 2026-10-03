@@ -115,6 +115,8 @@ export async function startHarness(
       ADMIN_PASSWORD: 'admin-pass-123',
       API_KEY: 'test-api-key',
       WEB_ORIGIN: 'http://localhost:3000',
+      // The limit e2e tests drive client IPs through X-Forwarded-For, i.e. behind exactly one proxy.
+      TRUST_PROXY_HOPS: '1',
       ...opts.env,
     });
     const models: Models = {

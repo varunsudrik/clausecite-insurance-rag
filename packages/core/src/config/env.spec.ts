@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { authEnv, llmEnv, loadEnv, rabbitEnv, redisEnv, retrievalEnv, storageEnv } from './env.js';
+import {
+  apiEnv,
+  authEnv,
+  llmEnv,
+  loadEnv,
+  rabbitEnv,
+  redisEnv,
+  retrievalEnv,
+  storageEnv,
+} from './env.js';
 
 describe('loadEnv', () => {
   it('applies model defaults and splits fallback models', () => {
@@ -75,5 +84,55 @@ describe('storageEnv', () => {
   it('requires STORAGE_DIR: a cwd-relative default would diverge between API and worker', () => {
     expect(() => loadEnv(storageEnv, {})).toThrow(/Invalid environment[\s\S]*STORAGE_DIR/);
     expect(loadEnv(storageEnv, { STORAGE_DIR: '/data/pdfs' }).STORAGE_DIR).toBe('/data/pdfs');
+  });
+});
+
+describe('spend protection env (DECISIONS 012)', () => {
+  const auth = { JWT_SECRET: 'x'.repeat(32) };
+
+  it('defaults the global daily budget to 2,000,000 and the search charge to 300', () => {
+    const env = loadEnv(authEnv, auth);
+    expect(env.GLOBAL_DAILY_TOKEN_BUDGET).toBe(2_000_000);
+    expect(env.SEARCH_TOKEN_COST).toBe(300);
+  });
+
+  it('coerces the budget and charge from strings and treats empty values as unset', () => {
+    const env = loadEnv(authEnv, {
+      ...auth,
+      GLOBAL_DAILY_TOKEN_BUDGET: '500000',
+      SEARCH_TOKEN_COST: '0',
+    });
+    expect(env.GLOBAL_DAILY_TOKEN_BUDGET).toBe(500_000);
+    expect(env.SEARCH_TOKEN_COST).toBe(0);
+    const blank = loadEnv(authEnv, {
+      ...auth,
+      GLOBAL_DAILY_TOKEN_BUDGET: '',
+      SEARCH_TOKEN_COST: '',
+    });
+    expect(blank.GLOBAL_DAILY_TOKEN_BUDGET).toBe(2_000_000);
+    expect(blank.SEARCH_TOKEN_COST).toBe(300);
+  });
+
+  it.each([
+    ['GLOBAL_DAILY_TOKEN_BUDGET', '0'],
+    ['GLOBAL_DAILY_TOKEN_BUDGET', '-5'],
+    ['GLOBAL_DAILY_TOKEN_BUDGET', '1.5'],
+    ['GLOBAL_DAILY_TOKEN_BUDGET', 'lots'],
+    ['SEARCH_TOKEN_COST', '-1'],
+    ['SEARCH_TOKEN_COST', '2.5'],
+    ['SEARCH_TOKEN_COST', 'x'],
+  ])('rejects %s=%s', (key, value) => {
+    expect(() => loadEnv(authEnv, { ...auth, [key]: value })).toThrow(new RegExp(key));
+  });
+
+  it('trusts no proxy by default and coerces TRUST_PROXY_HOPS to a non-negative integer', () => {
+    expect(loadEnv(apiEnv, {}).TRUST_PROXY_HOPS).toBe(0);
+    expect(loadEnv(apiEnv, { TRUST_PROXY_HOPS: '' }).TRUST_PROXY_HOPS).toBe(0);
+    expect(loadEnv(apiEnv, { TRUST_PROXY_HOPS: '1' }).TRUST_PROXY_HOPS).toBe(1);
+    expect(loadEnv(apiEnv, { TRUST_PROXY_HOPS: '2' }).TRUST_PROXY_HOPS).toBe(2);
+  });
+
+  it.each(['-1', '1.5', 'one', 'true'])('rejects TRUST_PROXY_HOPS=%s', (value) => {
+    expect(() => loadEnv(apiEnv, { TRUST_PROXY_HOPS: value })).toThrow(/TRUST_PROXY_HOPS/);
   });
 });

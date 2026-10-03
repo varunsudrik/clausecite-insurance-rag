@@ -65,13 +65,15 @@ Short records of choices that refine or deviate from the design spec, with the r
 **Planned (Phase 1B):** log the close instead of exiting, report `rabbitmq: false` on `/health`, reconnect lazily on publish and answer `503` if that fails.
 **Resolution:** the API now uses a lazy, reconnecting `RabbitPublisher`; it boots and serves chat/search without the broker, `/health` reports `rabbitmq: false`, uploads return 503 until the broker is back. The worker remains crash-only.
 
-## 012 — Spend protection is a Phase 1B deploy gate
+## 012 — Spend protection is a Phase 1B deploy gate (implemented)
 
-**Context:** per-user daily token budgets and per-user/per-IP rate limits exist (fail closed on Redis errors), but nothing bounds the total spend of the deployment.
-**Gate:** before the public demo, add
+**Context:** per-user daily token budgets and per-user/per-IP rate limits existed (fail closed on Redis errors), but nothing bounded the total spend of the deployment, and search and refusals were free to spam up to the rate limit.
+**Implemented:**
 
-- a global daily token/cost cap in Redis (fail closed);
-- IPv6 `/64` bucketing for the per-IP limits;
-- nominal budget charges for search and refusals (search records no usage and a refusal only costs its rewrite tokens, so both are free to spam up to the rate limit);
-- an env-driven `trust proxy` setting (it is hard-coded to `1` today, which is only right behind exactly one proxy);
-- a credit limit on the OpenRouter key itself.
+- **Global daily cap:** `GLOBAL_DAILY_TOKEN_BUDGET` (default 2,000,000) on Redis key `budget:global:<utc-day>`. Every role counts toward it (admins included) and `assertBudget` checks it before anything else, for admins too; once spent, `/chat` and `/search` answer 429 `Service daily budget exhausted` with `Retry-After` until UTC midnight. Fail closed: a Redis error or a non-numeric counter rejects the request.
+- **Nominal charges:** `SEARCH_TOKEN_COST` (default 300) is recorded for every `/search` call (refusals and retrieval errors included) and for every chat that reaches retrieval and completes or refuses, on top of the rewrite and model tokens. Guests are charged on both their own and the global counter, admins on the global counter only.
+- **IPv6 `/64` buckets:** every IP rate-limit bucket is keyed by `clientIpKey(req.ip)`: IPv4 as-is, IPv4-mapped IPv6 as the IPv4 address, any other IPv6 address by its first four hextets (`2001:db8:abcd:12::/64`), anything unparsable as `unknown`.
+- **`TRUST_PROXY_HOPS`** (default `0`) drives Express `trust proxy`. `0` means `req.ip` is the socket address and `X-Forwarded-For` is ignored; production sets `1` (behind Caddy). The API test harness sets `1` because the limit e2e tests drive client IPs through `X-Forwarded-For`.
+
+**Not covered:** a chat that fails mid-generation records the tokens it knows about but not the flat `SEARCH_TOKEN_COST` (the failure path is unchanged), so the OpenRouter key's own credit limit below is the backstop for failure-heavy abuse.
+**Remaining manual step (before going public):** set a credit limit on the OpenRouter key (openrouter.ai → Keys → Edit → Credit limit). It is the only bound that does not depend on this code.

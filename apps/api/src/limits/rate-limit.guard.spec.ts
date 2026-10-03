@@ -17,14 +17,17 @@ class Routes {
 
 const user = { id: 'u1', role: 'guest' as const };
 
-function setup(result: LimitResult = { allowed: true, retryAfterSeconds: 0 }) {
+function setup(
+  result: LimitResult = { allowed: true, retryAfterSeconds: 0 },
+  ip: string | null = '1.2.3.4',
+) {
   const check = vi.fn(async () => result);
   const guard = new RateLimitGuard(new Reflector(), { check } as unknown as LimitsService);
   const ctx = (cls: new () => object, method: string) =>
     ({
       getHandler: () => (cls.prototype as Record<string, () => void>)[method],
       getClass: () => cls,
-      switchToHttp: () => ({ getRequest: () => ({ user, ip: '1.2.3.4' }) }),
+      switchToHttp: () => ({ getRequest: () => ({ user, ip: ip ?? undefined }) }),
     }) as unknown as ExecutionContext;
   return { guard, check, ctx };
 }
@@ -34,6 +37,24 @@ describe('RateLimitGuard', () => {
     const { guard, check, ctx } = setup();
     expect(await guard.canActivate(ctx(Routes, 'limited'))).toBe(true);
     expect(check).toHaveBeenCalledWith('guestToken', user, '1.2.3.4');
+  });
+
+  it('buckets an IPv6 client by its /64', async () => {
+    const { guard, check, ctx } = setup(undefined, '2001:db8:abcd:12:1:2:3:4');
+    await guard.canActivate(ctx(Routes, 'limited'));
+    expect(check).toHaveBeenCalledWith('guestToken', user, '2001:db8:abcd:12::/64');
+  });
+
+  it('unmaps an IPv4-mapped IPv6 address', async () => {
+    const { guard, check, ctx } = setup(undefined, '::ffff:203.0.113.7');
+    await guard.canActivate(ctx(Routes, 'limited'));
+    expect(check).toHaveBeenCalledWith('guestToken', user, '203.0.113.7');
+  });
+
+  it('falls back to "unknown" when the request has no ip', async () => {
+    const { guard, check, ctx } = setup(undefined, null);
+    await guard.canActivate(ctx(Routes, 'limited'));
+    expect(check).toHaveBeenCalledWith('guestToken', user, 'unknown');
   });
 
   it('throws 429 with retryAfterSeconds in the body when blocked', async () => {

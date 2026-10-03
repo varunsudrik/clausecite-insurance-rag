@@ -3,6 +3,7 @@ import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redi
 import { Redis } from 'ioredis';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApiConfig } from '../infra/tokens.js';
+import { clientIpKey } from './client-ip.js';
 import { LimitsService } from './limits.service.js';
 
 let container: StartedRedisContainer;
@@ -12,7 +13,11 @@ let limits: LimitsService;
 beforeAll(async () => {
   container = await new RedisContainer('redis:7-alpine').start();
   redis = new Redis(container.getConnectionUrl());
-  limits = new LimitsService(redis, { GUEST_DAILY_TOKEN_BUDGET: 1000 } as ApiConfig);
+  limits = new LimitsService(redis, {
+    GUEST_DAILY_TOKEN_BUDGET: 1000,
+    GLOBAL_DAILY_TOKEN_BUDGET: 1_000_000,
+    SEARCH_TOKEN_COST: 300,
+  } as ApiConfig);
 });
 afterAll(async () => {
   await redis?.quit();
@@ -31,6 +36,9 @@ afterEach(() => {
 });
 
 const guest = (id: string) => ({ id, role: 'guest' as const });
+const admin = (id: string) => ({ id, role: 'admin' as const });
+const globalKey = (day = '2030-01-01') => `budget:global:${day}`;
+const globalUsed = async (day?: string) => Number((await redis.get(globalKey(day))) ?? 0);
 
 describe('LimitsService', () => {
   it('allows 10 chat requests per guest per minute, then blocks with retry-after', async () => {
@@ -79,10 +87,9 @@ describe('LimitsService', () => {
   });
 
   it('gives admins a higher per-user limit and no IP cap', async () => {
-    const admin = { id: 'a1', role: 'admin' as const };
+    const a1 = admin('a1');
     let allowed = 0;
-    for (let i = 0; i < 61; i++)
-      if ((await limits.check('chat', admin, '3.3.3.3')).allowed) allowed++;
+    for (let i = 0; i < 61; i++) if ((await limits.check('chat', a1, '3.3.3.3')).allowed) allowed++;
     expect(allowed).toBe(60);
   });
 
@@ -126,5 +133,129 @@ describe('LimitsService', () => {
     vi.setSystemTime(Date.UTC(2030, 0, 2, 0, 0, 1));
     expect(await limits.usedToday('budget-reset')).toBe(0);
     await limits.assertBudget(g);
+  });
+});
+
+describe('LimitsService IP buckets', () => {
+  it('counts two IPv6 clients of one /64 against the same IP bucket', async () => {
+    let allowed = 0;
+    for (let i = 0; i < 35; i++) {
+      const ip = clientIpKey(`2001:db8:aa:bb:${(i + 1).toString(16)}::1`);
+      if ((await limits.check('search', guest(`v6-${i}`), ip)).allowed) allowed++;
+    }
+    expect(allowed).toBe(30);
+  });
+
+  it('keeps different /64s in separate IP buckets', async () => {
+    for (let i = 0; i < 30; i++)
+      await limits.check('search', guest(`v6a-${i}`), clientIpKey('2001:db8:cc:1::1'));
+    const other = await limits.check('search', guest('v6b'), clientIpKey('2001:db8:cc:2::1'));
+    expect(other.allowed).toBe(true);
+  });
+});
+
+describe('global daily budget (DECISIONS 012)', () => {
+  const globalLimits = (budget: number) =>
+    new LimitsService(redis, {
+      GUEST_DAILY_TOKEN_BUDGET: 1_000_000,
+      GLOBAL_DAILY_TOKEN_BUDGET: budget,
+      SEARCH_TOKEN_COST: 300,
+    } as ApiConfig);
+
+  beforeEach(async () => {
+    await redis.del(globalKey(), globalKey('2030-01-02'));
+  });
+
+  it('blocks everyone, admins included, once guests and admins together spend the cap', async () => {
+    const capped = globalLimits(1000);
+    await capped.recordUsage(guest('cap-a'), 600);
+    await capped.assertBudget(guest('cap-c')); // 600 < 1000: still open
+    await capped.recordUsage(admin('cap-b'), 400);
+    expect(await globalUsed()).toBe(1000);
+
+    for (const user of [guest('cap-c'), admin('cap-b')]) {
+      const err = await capped.assertBudget(user).catch((e) => e);
+      expect(err).toBeInstanceOf(HttpException);
+      expect((err as HttpException).getStatus()).toBe(429);
+      expect((err as HttpException).getResponse()).toMatchObject({
+        message: 'Service daily budget exhausted',
+        retryAfterSeconds: 41_370, // 11 h 29 m 30 s until UTC midnight
+      });
+    }
+  });
+
+  it('reports the global message even when the guest still has personal budget left', async () => {
+    const capped = globalLimits(100);
+    await capped.recordUsage(guest('cap-d'), 100);
+    const err = await capped.assertBudget(guest('cap-d')).catch((e) => e);
+    expect((err as HttpException).getResponse()).toMatchObject({
+      message: 'Service daily budget exhausted',
+    });
+  });
+
+  it('keeps the per-guest message when only the guest is over its own budget', async () => {
+    const g = guest('own-budget');
+    await limits.recordUsage(g, 1000);
+    const err = await limits.assertBudget(g).catch((e) => e);
+    expect((err as HttpException).getResponse()).toMatchObject({
+      message: 'Daily token budget exhausted',
+    });
+  });
+
+  it('resets on the next UTC day', async () => {
+    const capped = globalLimits(1000);
+    await capped.recordUsage(guest('cap-e'), 1000);
+    await expect(capped.assertBudget(guest('cap-f'))).rejects.toBeInstanceOf(HttpException);
+    vi.setSystemTime(Date.UTC(2030, 0, 2, 0, 0, 1));
+    await capped.assertBudget(guest('cap-f'));
+    await capped.assertBudget(admin('cap-g'));
+  });
+
+  it('gives the global counter a TTL so the key expires on its own', async () => {
+    await limits.recordUsage(guest('ttl-g'), 10);
+    const ttl = await redis.ttl(globalKey());
+    expect(ttl).toBeGreaterThan(24 * 3600);
+    expect(ttl).toBeLessThanOrEqual(2 * 24 * 3600);
+  });
+
+  it('counts admin usage on the global key but not on a per-user key', async () => {
+    await limits.recordUsage(admin('adm-usage'), 250);
+    expect(await globalUsed()).toBe(250);
+    expect(await redis.keys('budget:adm-usage:*')).toEqual([]);
+    expect(await limits.usedToday('adm-usage')).toBe(0);
+  });
+
+  it('counts guest usage on both the global and the per-guest key', async () => {
+    await limits.recordUsage(guest('gst-usage'), 125);
+    expect(await globalUsed()).toBe(125);
+    expect(await limits.usedToday('gst-usage')).toBe(125);
+  });
+
+  it('chargeSearch adds SEARCH_TOKEN_COST to both the global and the guest keys', async () => {
+    await limits.chargeSearch(guest('charge-g'));
+    await limits.chargeSearch(guest('charge-g'));
+    expect(await globalUsed()).toBe(600);
+    expect(await limits.usedToday('charge-g')).toBe(600);
+  });
+
+  it('chargeSearch charges an admin to the global key only', async () => {
+    await limits.chargeSearch(admin('charge-a'));
+    expect(await globalUsed()).toBe(300);
+    expect(await limits.usedToday('charge-a')).toBe(0);
+  });
+
+  it('nominal charges alone eventually trip the cap (search spam is no longer free)', async () => {
+    const capped = globalLimits(900);
+    for (let i = 0; i < 3; i++) {
+      await capped.assertBudget(guest('spam'));
+      await capped.chargeSearch(guest('spam'));
+    }
+    await expect(capped.assertBudget(guest('spam'))).rejects.toMatchObject({ status: 429 });
+  });
+
+  it('fails closed when the global counter is not a number', async () => {
+    await redis.set(globalKey(), 'garbage');
+    await expect(limits.assertBudget(guest('garbled'))).rejects.toThrow();
+    await expect(limits.assertBudget(admin('garbled-admin'))).rejects.toThrow();
   });
 });

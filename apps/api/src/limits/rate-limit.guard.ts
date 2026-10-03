@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { AuthedRequest } from '../auth/auth.types.js';
+import { clientIpKey } from './client-ip.js';
 import { LimitsService } from './limits.service.js';
 import { RATE_POLICY_KEY, type RatePolicyName } from './policies.js';
 
@@ -34,7 +35,7 @@ export class RateLimitGuard implements CanActivate {
       );
     }
     const req = ctx.switchToHttp().getRequest<AuthedRequest>();
-    const result = await this.limits.check(policy, req.user, req.ip ?? 'unknown');
+    const result = await this.limits.check(policy, req.user, clientIpKey(req.ip));
     if (!result.allowed) {
       throw new HttpException(
         { message: 'Rate limit exceeded', retryAfterSeconds: result.retryAfterSeconds },

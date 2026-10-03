@@ -184,3 +184,62 @@ describe('POST /search rate limit', () => {
     }
   });
 });
+
+describe('POST /search spend protection (DECISIONS 012)', () => {
+  const SEARCH_TOKEN_COST = 300;
+  const day = () => new Date().toISOString().slice(0, 10);
+  const globalKey = () => `budget:global:${day()}`;
+  const used = async (key: string) => Number((await h.redis.get(key)) ?? 0);
+  const userId = (headers: Record<string, string>) =>
+    JSON.parse(Buffer.from(headers.Authorization!.split('.')[1]!, 'base64url').toString())
+      .sub as string;
+  const userKey = (headers: Record<string, string>) => `budget:${userId(headers)}:${day()}`;
+
+  it('charges SEARCH_TOKEN_COST to the global budget and to a guest, per call', async () => {
+    const [globalBefore, guestBefore] = [await used(globalKey()), await used(userKey(guest))];
+    await search({ query: 'cataract waiting period' }, guest).expect(200);
+    await search({ query: 'room rent' }, guest).expect(200);
+    expect(await used(globalKey())).toBe(globalBefore + 2 * SEARCH_TOKEN_COST);
+    expect(await used(userKey(guest))).toBe(guestBefore + 2 * SEARCH_TOKEN_COST);
+  });
+
+  it('charges an admin to the global budget only', async () => {
+    const globalBefore = await used(globalKey());
+    await search({ query: 'cataract waiting period' }).expect(200);
+    expect(await used(globalKey())).toBe(globalBefore + SEARCH_TOKEN_COST);
+    expect(await h.redis.keys(`budget:${userId(admin)}:*`)).toEqual([]);
+  });
+
+  it('charges a refused search too, so spamming nonsense is not free', async () => {
+    const globalBefore = await used(globalKey());
+    const res = await search({ query: 'helicopter evacuation abroad' }, guest).expect(200);
+    expect(res.body.refused).toBe(true);
+    expect(await used(globalKey())).toBe(globalBefore + SEARCH_TOKEN_COST);
+  });
+
+  it('does not charge a request that is rejected before retrieval', async () => {
+    const globalBefore = await used(globalKey());
+    await search({ query: '' }, guest).expect(400);
+    await search({ query: 'room rent', documentIds: ['no-such-doc'] }, guest).expect(404);
+    expect(await used(globalKey())).toBe(globalBefore);
+  });
+
+  it('answers 429 before any embedding call once the global budget is spent, admins included', async () => {
+    const key = globalKey();
+    const prior = await h.redis.get(key);
+    await h.redis.set(key, '999999999');
+    try {
+      const embedCalls = embedding.doEmbedCalls.length;
+      for (const headers of [guest, admin]) {
+        const res = await search({ query: 'a never-seen query for the cap' }, headers).expect(429);
+        expect(res.body).toMatchObject({ message: 'Service daily budget exhausted' });
+        expect(Number(res.headers['retry-after'])).toBeGreaterThan(0);
+      }
+      expect(embedding.doEmbedCalls.length).toBe(embedCalls);
+      expect(await used(key)).toBe(999_999_999); // a blocked call is not charged
+    } finally {
+      if (prior === null) await h.redis.del(key);
+      else await h.redis.set(key, prior);
+    }
+  });
+});

@@ -49,6 +49,10 @@ export const authEnv = z.object({
   ADMIN_PASSWORD: z.string().optional(),
   API_KEY: z.string().optional(),
   GUEST_DAILY_TOKEN_BUDGET: z.coerce.number().int().positive().default(50_000),
+  // Spend protection (DECISIONS 012): the whole deployment's daily token cap, guests and admins
+  // together, and the flat charge for each retrieval (embed + rerank) that records no model usage.
+  GLOBAL_DAILY_TOKEN_BUDGET: z.coerce.number().int().positive().default(2_000_000),
+  SEARCH_TOKEN_COST: z.coerce.number().int().nonnegative().default(300),
 });
 
 // No default: a cwd-relative fallback would resolve to different directories for the API and the worker.
@@ -63,6 +67,9 @@ export const retrievalEnv = z.object({
 export const apiEnv = z.object({
   PORT: z.coerce.number().int().default(3001),
   WEB_ORIGIN: z.string().default('http://localhost:3000'),
+  // How many reverse proxies sit in front of the API (Express `trust proxy`). 0 = none: req.ip is the
+  // socket address and X-Forwarded-For is ignored, so a client cannot pick its own rate-limit bucket.
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).default(0),
 });
 
 export type DbEnv = z.infer<typeof dbEnv>;

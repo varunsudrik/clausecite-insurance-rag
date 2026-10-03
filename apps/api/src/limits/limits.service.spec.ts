@@ -6,17 +6,20 @@ import { LimitsService } from './limits.service.js';
 type Replies = [Error | null, unknown][] | null;
 
 /** A Redis double whose MULTI chain resolves EXEC with whatever the test dictates. */
-function service(replies: Replies) {
+function service(replies: Replies, get: () => Promise<string | null> = async () => null) {
   const exec = vi.fn(async () => replies);
-  const chain = { incr: () => chain, incrby: () => chain, expire: () => chain, exec };
+  const incrby = vi.fn((_key: string, _amount: number) => chain);
+  const chain = { incr: () => chain, incrby, expire: () => chain, exec };
   const multi = vi.fn(() => chain);
   const limits = new LimitsService(
-    { multi } as unknown as Redis,
+    { multi, get: vi.fn(get) } as unknown as Redis,
     {
       GUEST_DAILY_TOKEN_BUDGET: 1000,
+      GLOBAL_DAILY_TOKEN_BUDGET: 5000,
+      SEARCH_TOKEN_COST: 300,
     } as ApiConfig,
   );
-  return { limits, multi };
+  return { limits, multi, incrby };
 }
 
 const guest = { id: 'g', role: 'guest' as const };
@@ -62,10 +65,43 @@ describe('LimitsService.recordUsage', () => {
     },
   );
 
-  it('never records for admins', async () => {
-    const { limits, multi } = service([]);
+  it('records admin usage on the global key only', async () => {
+    const { limits, incrby } = service([
+      [null, 500],
+      [null, 1],
+    ]);
     await limits.recordUsage({ id: 'a', role: 'admin' }, 500);
-    expect(multi).not.toHaveBeenCalled();
+    expect(incrby).toHaveBeenCalledTimes(1);
+    expect(incrby).toHaveBeenCalledWith(
+      expect.stringMatching(/^budget:global:\d{4}-\d{2}-\d{2}$/),
+      500,
+    );
+  });
+
+  it('records guest usage on the global and the per-guest keys in one transaction', async () => {
+    const { limits, multi, incrby } = service([
+      [null, 10],
+      [null, 1],
+      [null, 10],
+      [null, 1],
+    ]);
+    await limits.recordUsage(guest, 10);
+    expect(multi).toHaveBeenCalledTimes(1);
+    expect(incrby.mock.calls.map(([key]) => key.replace(/\d{4}-\d{2}-\d{2}$/, 'DAY'))).toEqual([
+      'budget:global:DAY',
+      'budget:g:DAY',
+    ]);
+  });
+
+  it('chargeSearch records SEARCH_TOKEN_COST', async () => {
+    const { limits, incrby } = service([
+      [null, 300],
+      [null, 1],
+      [null, 300],
+      [null, 1],
+    ]);
+    await limits.chargeSearch(guest);
+    expect(incrby).toHaveBeenCalledWith(expect.any(String), 300);
   });
 
   it('throws when EXEC reports an error or is aborted', async () => {
@@ -85,5 +121,21 @@ describe('LimitsService.recordUsage', () => {
     ]);
     await limits.recordUsage(guest, 10);
     expect(multi).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('LimitsService.assertBudget fails closed', () => {
+  it('rejects when Redis cannot be read, for guests and admins alike', async () => {
+    const down = async () => {
+      throw new Error('ECONNREFUSED');
+    };
+    await expect(service([], down).limits.assertBudget(guest)).rejects.toThrow(/ECONNREFUSED/);
+    await expect(service([], down).limits.assertBudget({ id: 'a', role: 'admin' })).rejects.toThrow(
+      /ECONNREFUSED/,
+    );
+  });
+
+  it('rejects when the global counter is unreadable as a number', async () => {
+    await expect(service([], async () => 'nope').limits.assertBudget(guest)).rejects.toThrow();
   });
 });

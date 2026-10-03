@@ -26,7 +26,7 @@ import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { createUIMessageStream, streamText, type InferUIMessageChunk } from 'ai';
 import type { AuthUser } from '../auth/auth.types.js';
 import { DocumentsService } from '../documents/documents.service.js';
-import { DATABASE, MODELS } from '../infra/tokens.js';
+import { API_ENV, DATABASE, MODELS, type ApiConfig } from '../infra/tokens.js';
 import { LimitsService } from '../limits/limits.service.js';
 import { RetrievalService } from '../search/retrieval.service.js';
 
@@ -56,6 +56,7 @@ export class ChatService {
     @Inject(RetrievalService) private readonly retrieval: RetrievalService,
     @Inject(DocumentsService) private readonly docs: DocumentsService,
     @Inject(LimitsService) private readonly limits: LimitsService,
+    @Inject(API_ENV) private readonly env: ApiConfig,
   ) {}
 
   /** Everything that can fail with a normal HTTP status happens here, before streaming starts. */
@@ -179,7 +180,8 @@ export class ChatService {
               latencyMs: latency,
               retrievedChunkIds: retrieval.suggestions.map((s) => s.chunkId),
             });
-            await this.limits.recordUsage(user, tokens);
+            // A refusal still ran retrieval (embed + rerank): charge it, so it is not free to spam.
+            await this.limits.recordUsage(user, tokens + this.env.SEARCH_TOKEN_COST);
             writer.write({
               type: 'data-meta',
               data: meta({
@@ -254,7 +256,8 @@ export class ChatService {
             latencyMs: latency,
             retrievedChunkIds: retrieval.chunks.map((c) => c.chunkId),
           });
-          await this.limits.recordUsage(user, tokens);
+          // Rewrite + model tokens, plus the flat charge for the retrieval that fed the answer.
+          await this.limits.recordUsage(user, tokens + this.env.SEARCH_TOKEN_COST);
           writer.write({
             type: 'data-meta',
             data: meta({

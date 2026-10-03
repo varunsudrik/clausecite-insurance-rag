@@ -50,6 +50,7 @@ export class LimitsService {
     };
   }
 
+  /** `ip` is a bucket key from `clientIpKey` (IPv4, or an IPv6 /64), not a raw address. */
   async check(
     policy: RatePolicyName,
     user: AuthUser | undefined,
@@ -74,11 +75,30 @@ export class LimitsService {
     return r.allowed ? { allowed: true, retryAfterSeconds: 0 } : r;
   }
 
-  async usedToday(userId: string): Promise<number> {
-    return Number((await this.redis.get(`budget:${userId}:${utcDay()}`)) ?? 0);
+  /** A counter's value; a stored value that is not a number must fail closed, never read as 0. */
+  private async counter(key: string): Promise<number> {
+    const used = Number((await this.redis.get(key)) ?? 0);
+    if (!Number.isFinite(used)) throw new Error(`Budget counter ${key} holds a non-numeric value`);
+    return used;
   }
 
+  private globalKey = () => `budget:global:${utcDay()}`;
+
+  async usedToday(userId: string): Promise<number> {
+    return this.counter(`budget:${userId}:${utcDay()}`);
+  }
+
+  /**
+   * Throws 429 once the whole deployment (every role) has spent GLOBAL_DAILY_TOKEN_BUDGET today, or,
+   * for guests, once that guest has spent GUEST_DAILY_TOKEN_BUDGET. A Redis failure rejects the request.
+   */
   async assertBudget(user: AuthUser): Promise<void> {
+    if ((await this.counter(this.globalKey())) >= this.env.GLOBAL_DAILY_TOKEN_BUDGET) {
+      throw new HttpException(
+        { message: 'Service daily budget exhausted', retryAfterSeconds: secondsUntilUtcMidnight() },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
     if (user.role === 'admin') return;
     if ((await this.usedToday(user.id)) >= this.env.GUEST_DAILY_TOKEN_BUDGET) {
       throw new HttpException(
@@ -88,17 +108,23 @@ export class LimitsService {
     }
   }
 
+  /** Adds to the global counter for every role, and to the per-user counter for guests only. */
   async recordUsage(user: AuthUser, tokens: number): Promise<void> {
-    if (user.role === 'admin' || !Number.isFinite(tokens)) return;
+    if (!Number.isFinite(tokens)) return;
     const amount = Math.round(tokens);
     if (amount <= 0) return;
-    const key = `budget:${user.id}:${utcDay()}`;
-    execResults(
-      await this.redis
-        .multi()
-        .incrby(key, amount)
-        .expire(key, 2 * 24 * 3600)
-        .exec(),
-    );
+    const ttl = 2 * 24 * 3600;
+    const globalKey = this.globalKey();
+    const multi = this.redis.multi().incrby(globalKey, amount).expire(globalKey, ttl);
+    if (user.role !== 'admin') {
+      const key = `budget:${user.id}:${utcDay()}`;
+      multi.incrby(key, amount).expire(key, ttl);
+    }
+    execResults(await multi.exec());
+  }
+
+  /** The nominal charge for a retrieval (query embedding + rerank), which records no model usage itself. */
+  chargeSearch(user: AuthUser): Promise<void> {
+    return this.recordUsage(user, this.env.SEARCH_TOKEN_COST);
   }
 }

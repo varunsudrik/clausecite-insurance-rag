@@ -35,3 +35,12 @@ describe('login rate limit', () => {
     await attempt('6.6.6.6', 'admin-pass-123').expect(200); // other IPs unaffected
   });
 });
+
+describe('IPv6 clients', () => {
+  it('shares one guest-token bucket across a whole /64 and keeps other /64s apart', async () => {
+    for (let i = 1; i <= 5; i++)
+      await h.http.post('/auth/guest').set('X-Forwarded-For', `2001:db8:5:6::${i}`).expect(201);
+    await h.http.post('/auth/guest').set('X-Forwarded-For', '2001:db8:5:6:ffff::1').expect(429);
+    await h.http.post('/auth/guest').set('X-Forwarded-For', '2001:db8:5:7::1').expect(201);
+  });
+});

@@ -16,14 +16,29 @@ const chat = mockChatModel({
   ],
 });
 const rewrite = mockChatModel({
-  generate: ['What is the waiting period for knee replacement in Sample Health Shield?'],
+  generate: [
+    'What is the waiting period for knee replacement in Sample Health Shield?',
+    'helicopter evacuation abroad?',
+  ],
 });
+// The mock models report 10 input + 5 output tokens per call; retrieval is charged a flat amount.
+const MOCK_CALL_TOKENS = 15;
+const SEARCH_TOKEN_COST = 300;
 
 let h: Harness;
+let admin: Record<string, string>;
 let guestA: Record<string, string>;
 let guestB: Record<string, string>;
 
 type Chunk = { type: string; [k: string]: any };
+
+const day = () => new Date().toISOString().slice(0, 10);
+const userId = (headers: Record<string, string>) =>
+  JSON.parse(Buffer.from(headers.Authorization!.split('.')[1]!, 'base64url').toString())
+    .sub as string;
+const budgetKey = (id: string) => `budget:${id}:${day()}`;
+const globalKey = () => budgetKey('global');
+const used = async (key: string) => Number((await h.redis.get(key)) ?? 0);
 
 async function postChat(body: object, headers: Record<string, string>) {
   const res = await h.http
@@ -55,7 +70,7 @@ async function postChat(body: object, headers: Record<string, string>) {
 
 beforeAll(async () => {
   h = await startHarness({ models: { embedding, chat, rewrite } });
-  const admin = {
+  admin = {
     Authorization: `Bearer ${(await h.http.post('/auth/login').send({ email: 'admin@test.local', password: 'admin-pass-123' })).body.token}`,
   };
   guestA = { Authorization: `Bearer ${(await h.http.post('/auth/guest')).body.token}` };
@@ -87,6 +102,7 @@ let conversationId: string;
 
 describe('POST /chat', () => {
   it('streams start → sources → text → meta → finish and stores a cleaned, cited answer', async () => {
+    const globalBefore = await used(globalKey());
     const { res, chunks, text } = await postChat(
       { message: 'What is the waiting period for cataract?' },
       guestA,
@@ -121,9 +137,12 @@ describe('POST /chat', () => {
     expect(stored).toMatchObject({ role: 'assistant', status: 'complete', mode: 'quick' });
     expect(stored.usage).toMatchObject({ model: 'mock-chat' });
     expect(stored.latencyMs?.total).toBeGreaterThan(0);
+    // A first turn has no rewrite: the answer's own tokens plus the flat retrieval charge.
+    expect(await used(globalKey())).toBe(globalBefore + MOCK_CALL_TOKENS + SEARCH_TOKEN_COST);
   });
 
   it('rewrites follow-ups using conversation history', async () => {
+    const globalBefore = await used(globalKey());
     const { chunks } = await postChat({ conversationId, message: 'and knee replacement?' }, guestA);
     const sources = chunks.find((c) => c.type === 'data-sources')!.data;
     expect(sources.question).toBe(
@@ -135,6 +154,8 @@ describe('POST /chat', () => {
     // The rewrite transcript replays the prior answer without its stale [n] markers too.
     expect(prompt).toContain('24 months of continuous coverage');
     expect(prompt).not.toMatch(/continuous coverage\.? ?\[1\]/);
+    // rewrite + answer tokens + the flat retrieval charge
+    expect(await used(globalKey())).toBe(globalBefore + 2 * MOCK_CALL_TOKENS + SEARCH_TOKEN_COST);
   });
 
   it('replays the prior answer to the chat model without its stale [n] markers', () => {
@@ -150,6 +171,10 @@ describe('POST /chat', () => {
 
   it('refuses without calling the chat model when nothing is relevant', async () => {
     const before = chat.doStreamCalls.length;
+    const [globalBefore, guestBefore] = [
+      await used(globalKey()),
+      await used(budgetKey(userId(guestA))),
+    ];
     const { chunks, text } = await postChat({ message: 'helicopter evacuation abroad?' }, guestA);
     const meta = chunks.find((c) => c.type === 'data-meta')!.data;
     expect(meta.status).toBe('refused');
@@ -175,6 +200,23 @@ describe('POST /chat', () => {
     expect(stored.retrievedChunkIds).toEqual(
       meta.suggestions.map((s: { chunkId: string }) => s.chunkId),
     );
+
+    // A first-turn refusal has no rewrite, so it costs exactly the flat retrieval charge.
+    expect(await used(globalKey())).toBe(globalBefore + SEARCH_TOKEN_COST);
+    expect(await used(budgetKey(userId(guestA)))).toBe(guestBefore + SEARCH_TOKEN_COST);
+  });
+
+  it('charges a refused follow-up its rewrite tokens plus the flat retrieval charge', async () => {
+    // Its own conversation, so the history assertions of the tests below are untouched.
+    const first = await postChat({ message: 'helicopter evacuation abroad?' }, guestA);
+    const { conversationId: refusedId } = first.chunks.find((c) => c.type === 'data-meta')!.data;
+    const globalBefore = await used(globalKey());
+    const { chunks } = await postChat(
+      { conversationId: refusedId, message: 'and abroad?' },
+      guestA,
+    );
+    expect(chunks.find((c) => c.type === 'data-meta')!.data.status).toBe('refused');
+    expect(await used(globalKey())).toBe(globalBefore + MOCK_CALL_TOKENS + SEARCH_TOKEN_COST);
   });
 
   it('emits an error chunk and stores status=error when generation fails', async () => {
@@ -207,11 +249,6 @@ describe('conversations', () => {
 });
 
 describe('budgets', () => {
-  const userId = (headers: Record<string, string>) =>
-    JSON.parse(Buffer.from(headers.Authorization!.split('.')[1]!, 'base64url').toString())
-      .sub as string;
-  const budgetKey = (id: string) => `budget:${id}:${new Date().toISOString().slice(0, 10)}`;
-
   it('records the tokens a guest spent on the daily budget', async () => {
     // First answer alone cost 10 input + 5 output mock tokens, and later turns only add to it.
     expect(Number(await h.redis.get(budgetKey(userId(guestA))))).toBeGreaterThanOrEqual(15);
@@ -231,5 +268,33 @@ describe('budgets', () => {
       .from(conversations)
       .where(eq(conversations.userId, userId(guestB)));
     expect(rows).toHaveLength(0);
+  });
+
+  it('rejects every caller, admins included, once the global daily budget is spent', async () => {
+    const key = globalKey();
+    const prior = await h.redis.get(key);
+    await h.redis.set(key, '999999999');
+    try {
+      for (const headers of [guestA, admin]) {
+        const res = await h.http
+          .post('/chat')
+          .set(headers)
+          .send({ message: 'is the service still open?' })
+          .expect(429);
+        expect(res.body).toMatchObject({ message: 'Service daily budget exhausted' });
+        expect(Number(res.headers['retry-after'])).toBeGreaterThan(0);
+      }
+    } finally {
+      if (prior === null) await h.redis.del(key);
+      else await h.redis.set(key, prior);
+    }
+  });
+
+  it('counts admin chat usage on the global budget but not on a per-user key', async () => {
+    const globalBefore = await used(globalKey());
+    const { chunks } = await postChat({ message: 'helicopter evacuation abroad?' }, admin);
+    expect(chunks.find((c) => c.type === 'data-meta')!.data.status).toBe('refused');
+    expect(await used(globalKey())).toBe(globalBefore + SEARCH_TOKEN_COST);
+    expect(await h.redis.keys(`budget:${userId(admin)}:*`)).toEqual([]);
   });
 });
