@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { EmbeddingModel } from 'ai';
+import { EMBEDDING_DIMENSIONS } from '../db/schema.js';
 import { embedQuery } from './embed.js';
 
 export interface KeyValueCache {
@@ -9,8 +10,23 @@ export interface KeyValueCache {
 
 const normalize = (q: string) => q.toLowerCase().replace(/\s+/g, ' ').trim();
 
-const isVector = (v: unknown): v is number[] =>
-  Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === 'number' && Number.isFinite(x));
+/** A vector is cacheable (and a cached entry usable) only if it has the schema's dimension and finite values. */
+const isValid = (v: ArrayLike<number>): boolean =>
+  v.length === EMBEDDING_DIMENSIONS && Array.prototype.every.call(v, Number.isFinite);
+
+/** Little-endian float32, base64: about 8 KB per vector instead of about 25 KB as JSON. */
+function encode(vector: number[]): string {
+  const buf = Buffer.alloc(vector.length * 4);
+  vector.forEach((v, i) => buf.writeFloatLE(v, i * 4));
+  return buf.toString('base64');
+}
+
+function decode(value: string): number[] | null {
+  const buf = Buffer.from(value, 'base64');
+  if (buf.length !== EMBEDDING_DIMENSIONS * 4) return null;
+  const vector = Array.from({ length: EMBEDDING_DIMENSIONS }, (_, i) => buf.readFloatLE(i * 4));
+  return isValid(vector) ? vector : null;
+}
 
 export function createCachedQueryEmbedder(
   model: EmbeddingModel,
@@ -20,32 +36,37 @@ export function createCachedQueryEmbedder(
 ): (query: string) => Promise<number[]> {
   const ttl = opts.ttlSeconds ?? 7 * 24 * 3600;
 
-  // The cache is an optimization: any failure (cache down, corrupt or unparsable entry) is a miss.
+  // The cache is an optimization: any failure (cache down, wrong-size or corrupt entry) is a miss.
   const lookup = async (key: string): Promise<number[] | null> => {
     try {
       const cached = await cache.get(key);
-      if (!cached) return null;
-      const parsed: unknown = JSON.parse(cached);
-      return isVector(parsed) ? parsed : null;
+      return cached ? decode(cached) : null;
     } catch {
       return null;
     }
   };
 
   return async (query) => {
-    const key = `emb:${modelId}:${createHash('sha256').update(normalize(query)).digest('hex')}`;
+    const normalized = normalize(query);
+    const key = `emb:${modelId}:${createHash('sha256').update(normalized).digest('hex')}`;
     const cached = await lookup(key);
     if (cached) {
       opts.onHit?.();
       return cached;
     }
     opts.onMiss?.();
-    const embedding = await embedQuery(model, query);
+    // Embed the normalized text (the cache key's input), so the cached vector is the same
+    // whichever spelling of the query warmed it.
+    const embedding = await embedQuery(model, normalized);
+    // Round to float32 (what pgvector stores anyway) so a miss returns exactly what a later hit will.
+    const stored = embedding.map(Math.fround);
+    if (!isValid(stored)) return embedding;
     try {
-      await cache.set(key, JSON.stringify(embedding), ttl);
+      // Fire and forget: a slow or failing cache must never add latency to, or fail, the request.
+      void Promise.resolve(cache.set(key, encode(stored), ttl)).catch(() => undefined);
     } catch {
-      // best effort
+      // cache.set threw synchronously
     }
-    return embedding;
+    return stored;
   };
 }

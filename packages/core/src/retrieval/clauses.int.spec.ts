@@ -112,4 +112,84 @@ describe('findDefinitions', () => {
     expect((await findDefinitions(t.db, docA, 'cost_x')).map((r) => r.clauseId)).toEqual(['DEF.3']);
     expect(await findDefinitions(t.db, docA, 'cost\\x')).toEqual([]);
   });
+
+  it('ranks the defining chunk ("<term> means") ahead of earlier chunks that merely mention the term', async () => {
+    const doc = await seedDoc('rank', [
+      {
+        clauseId: 'D.1',
+        path: ['Definitions'],
+        text: 'Admission means the entry of a patient into a hospital for treatment.',
+      },
+      {
+        clauseId: 'D.2',
+        path: ['Definitions'],
+        text: 'Day care procedure means a treatment taken in a hospital or day care centre.',
+      },
+      {
+        clauseId: 'D.3',
+        path: ['Definitions'],
+        text: 'Hospital means an institution established for in-patient care.',
+      },
+    ]);
+    expect((await findDefinitions(t.db, doc, 'hospital', 1)).map((r) => r.clauseId)).toEqual([
+      'D.3',
+    ]);
+    // then the earlier mention first, then chunk order
+    expect((await findDefinitions(t.db, doc, 'hospital')).map((r) => r.clauseId)).toEqual([
+      'D.3',
+      'D.1',
+      'D.2',
+    ]);
+  });
+
+  it('recognizes straight and curly quoted terms before "means"', async () => {
+    const doc = await seedDoc('quotes', [
+      {
+        clauseId: 'Q.1',
+        path: ['Definitions'],
+        text: 'The hospital is also mentioned in the schedule.',
+      },
+      { clauseId: 'Q.2', path: ['Definitions'], text: 'The term "Hospital" means an institution.' },
+      {
+        clauseId: 'Q.3',
+        path: ['Definitions'],
+        text: 'Note: \u201cHospital\u201d means a registered facility.',
+      },
+    ]);
+    // both quoted definitions beat the incidental mention in the first chunk; among them the earlier mention wins
+    expect((await findDefinitions(t.db, doc, 'hospital')).map((r) => r.clauseId)).toEqual([
+      'Q.3',
+      'Q.2',
+      'Q.1',
+    ]);
+  });
+
+  it('without a "means" match, ranks by earliest mention of the term, then chunk order', async () => {
+    const doc = await seedDoc('position', [
+      { clauseId: 'P.1', path: ['Definitions'], text: 'The plan covers treatment in a hospital.' },
+      { clauseId: 'P.2', path: ['Definitions'], text: 'Hospital stays are covered.' },
+      { clauseId: 'P.3', path: ['Definitions'], text: 'Hospital charges are listed.' },
+    ]);
+    expect((await findDefinitions(t.db, doc, 'hospital')).map((r) => r.clauseId)).toEqual([
+      'P.2',
+      'P.3',
+      'P.1',
+    ]);
+  });
+
+  it('escapes LIKE wildcards in the "means" ranking patterns too', async () => {
+    const doc = await seedDoc('wild', [
+      {
+        clauseId: 'W.1',
+        path: ['Definitions'],
+        text: 'The 100% cover applies in the cost_x case.',
+      },
+      { clauseId: 'W.2', path: ['Definitions'], text: '100% means the full sum insured.' },
+      { clauseId: 'W.3', path: ['Definitions'], text: 'Cover is 1000 means nothing here.' },
+    ]);
+    expect((await findDefinitions(t.db, doc, '100%')).map((r) => r.clauseId)).toEqual([
+      'W.2',
+      'W.1',
+    ]);
+  });
 });

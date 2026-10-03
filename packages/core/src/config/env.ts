@@ -30,7 +30,11 @@ export const rabbitEnv = z.object({
   ),
 });
 
-export const redisEnv = z.object({ REDIS_URL: z.string().min(1) });
+export const redisEnv = z.object({
+  REDIS_URL: z.string().min(1),
+  // A separate, memory-bounded Redis for the query-embedding cache. Unset: the cache shares REDIS_URL.
+  CACHE_REDIS_URL: z.string().optional(),
+});
 
 export const authEnv = z.object({
   JWT_SECRET: z.string().min(32),

@@ -24,7 +24,16 @@ import {
   type OnApplicationShutdown,
 } from '@nestjs/common';
 import { Redis } from 'ioredis';
-import { API_ENV, DATABASE, MODELS, RABBIT, REDIS, RERANKER, type ApiConfig } from './tokens.js';
+import {
+  API_ENV,
+  CACHE_REDIS,
+  DATABASE,
+  MODELS,
+  RABBIT,
+  REDIS,
+  RERANKER,
+  type ApiConfig,
+} from './tokens.js';
 
 const logger = new Logger('Infra');
 
@@ -33,6 +42,7 @@ class InfraLifecycle implements OnApplicationShutdown {
   constructor(
     @Inject(DATABASE) private readonly database: DbHandle,
     @Inject(REDIS) private readonly redis: Redis,
+    @Inject(CACHE_REDIS) private readonly cacheRedis: Redis,
     @Inject(RABBIT) private readonly rabbit: RabbitConnection,
   ) {}
   async onApplicationShutdown() {
@@ -40,6 +50,7 @@ class InfraLifecycle implements OnApplicationShutdown {
     const results = await Promise.allSettled([
       this.rabbit.close(),
       this.redis.quit().catch(() => this.redis.disconnect()),
+      this.cacheRedis.quit().catch(() => this.cacheRedis.disconnect()),
       this.database.pool.end(),
     ]);
     for (const result of results) {
@@ -85,6 +96,20 @@ class InfraLifecycle implements OnApplicationShutdown {
       },
     },
     {
+      // Disposable cache client: a slow or unavailable cache must degrade to "no cache" within a second,
+      // never stall a request. Falls back to the main Redis URL when no dedicated cache is configured.
+      provide: CACHE_REDIS,
+      inject: [API_ENV],
+      useFactory: (env: ApiConfig) => {
+        const redis = new Redis(env.CACHE_REDIS_URL ?? env.REDIS_URL, {
+          maxRetriesPerRequest: 1,
+          commandTimeout: 1000,
+        });
+        redis.on('error', (err: Error) => logger.warn(`cache redis error: ${err.message}`));
+        return redis;
+      },
+    },
+    {
       provide: RABBIT,
       inject: [API_ENV],
       useFactory: (env: ApiConfig) =>
@@ -109,6 +134,6 @@ class InfraLifecycle implements OnApplicationShutdown {
     },
     InfraLifecycle,
   ],
-  exports: [API_ENV, DATABASE, REDIS, RABBIT, MODELS, RERANKER],
+  exports: [API_ENV, DATABASE, REDIS, CACHE_REDIS, RABBIT, MODELS, RERANKER],
 })
 export class InfraModule {}

@@ -26,5 +26,15 @@ services:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
       retries: 10
+  # Disposable query-embedding cache: bounded and evicting, so it can never starve `redis`,
+  # which holds the fail-closed rate-limit and token-budget counters.
+  redis-cache:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save "" --appendonly no
+    ports: ['6380:6379']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      retries: 10
 volumes:
   pgdata:

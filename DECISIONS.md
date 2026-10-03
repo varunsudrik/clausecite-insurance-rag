@@ -43,3 +43,9 @@ Short records of choices that refine or deviate from the design spec, with the r
 **Decision:** the API seeds the admin from env on bootstrap (idempotent, email lowercased, refuses the placeholder and passwords under 12 characters with a warning instead of crashing); guest/admin JWTs (HS256 pinned, 24 h / 12 h) are trusted without a DB lookup; machine API-key auth arrives with the MCP server in Phase 2.
 **Why:** no separate seed step for a one-admin demo; stateless auth keeps the hot path off the DB; YAGNI for API keys until a consumer exists.
 **Consequence:** a deleted user's token stays valid until expiry; writes keyed by `sub` must tolerate FK failures.
+
+## 009 — Embedding cache on its own bounded Redis
+
+**Decision:** cache query embeddings in a dedicated `redis-cache` instance (`--maxmemory 256mb --maxmemory-policy allkeys-lru`, no persistence), configured via `CACHE_REDIS_URL` (falls back to `REDIS_URL` when unset); entries are base64 float32 vectors (about 8 KB), written fire-and-forget with a 1 s command timeout.
+**Why:** cache keys come from user queries and live for 7 days, so enough unique queries could exhaust the Redis that also holds the fail-closed rate limits and token budgets; turning on `allkeys-lru` on that shared instance would instead let eviction drop budget and limit keys.
+**Consequence:** one more container; the production compose file (Phase 1B) must mirror it. A cache outage only costs a re-embed.

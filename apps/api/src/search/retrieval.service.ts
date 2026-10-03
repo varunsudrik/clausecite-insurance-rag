@@ -10,7 +10,14 @@ import {
 } from '@clausecite/core';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { Redis } from 'ioredis';
-import { API_ENV, DATABASE, MODELS, REDIS, RERANKER, type ApiConfig } from '../infra/tokens.js';
+import {
+  API_ENV,
+  CACHE_REDIS,
+  DATABASE,
+  MODELS,
+  RERANKER,
+  type ApiConfig,
+} from '../infra/tokens.js';
 
 export interface RunOptions {
   query: string;
@@ -27,7 +34,7 @@ export class RetrievalService {
     @Inject(DATABASE) private readonly database: DbHandle,
     @Inject(MODELS) private readonly models: Models,
     @Inject(RERANKER) private readonly reranker: Reranker,
-    @Inject(REDIS) private readonly redis: Redis,
+    @Inject(CACHE_REDIS) private readonly cache: Redis,
     @Inject(API_ENV) private readonly env: ApiConfig,
   ) {}
 
@@ -36,7 +43,7 @@ export class RetrievalService {
     const embedQuery = createCachedQueryEmbedder(
       this.models.embedding,
       this.models.ids.embedding,
-      { get: (k) => this.redis.get(k), set: (k, v, ttl) => this.redis.set(k, v, 'EX', ttl) },
+      { get: (k) => this.cache.get(k), set: (k, v, ttl) => this.cache.set(k, v, 'EX', ttl) },
       { onHit: () => (embeddingCacheHit = true) },
     );
     const result = await retrieve(

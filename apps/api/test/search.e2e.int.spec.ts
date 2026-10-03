@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ingestDocument } from '@clausecite/core';
 import { mockEmbeddingModel } from '@clausecite/core/testing';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { startHarness, type Harness } from './harness.js';
 
 const PDF = readFileSync(new URL('../../../data/fixtures/sample-policy.pdf', import.meta.url));
@@ -82,6 +82,10 @@ describe('POST /search', () => {
     const res = await search({ query: 'icu charges   LIMIT' }).expect(200);
     expect(embedding.doEmbedCalls.length).toBe(before);
     expect(res.body.embeddingCacheHit).toBe(true);
+    // stored compactly (base64 float32, not JSON) with the 7 day TTL
+    const [key] = await h.redis.keys('emb:mock-embedding:*');
+    expect(await h.redis.get(key)).toHaveLength(Math.ceil((1536 * 4) / 3) * 4);
+    expect(await h.redis.ttl(key)).toBeGreaterThan(6 * 24 * 3600);
   });
 
   it('reports a cache miss on the first sighting of a query', async () => {
@@ -165,9 +169,18 @@ describe('clauses and definitions', () => {
 
 describe('POST /search rate limit', () => {
   it('limits a guest to 10 searches per minute', async () => {
+    // The token is issued on the real clock, then Date is pinned 30 s into the next minute: the 11
+    // requests cannot straddle a window boundary, and the token stays valid. Only Date is faked
+    // (ioredis and supertest timers stay real), and it is restored even if an assertion fails.
     const fresh = { Authorization: `Bearer ${(await h.http.post('/auth/guest')).body.token}` };
-    for (let i = 0; i < 10; i++) await search({ query: 'room rent' }, fresh).expect(200);
-    const res = await search({ query: 'room rent' }, fresh).expect(429);
-    expect(res.headers['retry-after']).toBeDefined();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Math.ceil(Date.now() / 60_000) * 60_000 + 30_000);
+      for (let i = 0; i < 10; i++) await search({ query: 'room rent' }, fresh).expect(200);
+      const res = await search({ query: 'room rent' }, fresh).expect(429);
+      expect(res.headers['retry-after']).toBe('30');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

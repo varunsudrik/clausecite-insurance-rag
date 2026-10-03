@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { authEnv, llmEnv, loadEnv, rabbitEnv, retrievalEnv } from './env.js';
+import { authEnv, llmEnv, loadEnv, rabbitEnv, redisEnv, retrievalEnv } from './env.js';
 
 describe('loadEnv', () => {
   it('applies model defaults and splits fallback models', () => {
@@ -31,6 +31,16 @@ describe('loadEnv', () => {
     expect(() =>
       loadEnv(rabbitEnv, { RABBITMQ_URL: 'amqp://x', INGEST_RETRY_DELAYS_MS: '10,abc' }),
     ).toThrow(/Invalid environment/);
+  });
+
+  it('treats CACHE_REDIS_URL as optional and an empty value as unset', () => {
+    expect(loadEnv(redisEnv, { REDIS_URL: 'redis://a' }).CACHE_REDIS_URL).toBeUndefined();
+    expect(
+      loadEnv(redisEnv, { REDIS_URL: 'redis://a', CACHE_REDIS_URL: '' }).CACHE_REDIS_URL,
+    ).toBeUndefined();
+    expect(
+      loadEnv(redisEnv, { REDIS_URL: 'redis://a', CACHE_REDIS_URL: 'redis://b' }).CACHE_REDIS_URL,
+    ).toBe('redis://b');
   });
 
   it('throws a readable error listing the missing variable', () => {

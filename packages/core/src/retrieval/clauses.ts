@@ -43,13 +43,20 @@ export function getClauseChunks(
 
 const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
+/**
+ * Definitions of `term` within one document. The chunk that actually defines it ("Hospital means ...",
+ * also `"Hospital" means` with straight or curly quotes) ranks first; chunks that merely mention the
+ * term follow, earliest mention first, then in document order.
+ */
 export function findDefinitions(
   db: Db,
   documentId: string,
   term: string,
   limit = 3,
 ): Promise<ClauseChunk[]> {
-  const pattern = `%${escapeLike(term)}%`;
+  const escaped = escapeLike(term);
+  const pattern = `%${escaped}%`;
+  const defines = [` means`, `" means`, `\u201d means`].map((tail) => `%${escaped}${tail}%`);
   return db
     .select(columns)
     .from(chunks)
@@ -60,6 +67,10 @@ export function findDefinitions(
         sql`${chunks.content} ILIKE ${pattern}`,
       ),
     )
-    .orderBy(asc(chunks.chunkIndex))
+    .orderBy(
+      sql`(${chunks.content} ILIKE ${defines[0]} OR ${chunks.content} ILIKE ${defines[1]} OR ${chunks.content} ILIKE ${defines[2]}) DESC`,
+      sql`position(lower(${term}) in lower(${chunks.content}))`,
+      asc(chunks.chunkIndex),
+    )
     .limit(limit);
 }
