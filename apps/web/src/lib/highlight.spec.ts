@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makeHighlighter } from './highlight';
+import { escapeHtml, makeHighlighter } from './highlight';
 
 describe('makeHighlighter', () => {
   const h = makeHighlighter(
@@ -14,5 +14,13 @@ describe('makeHighlighter', () => {
   });
   it('ignores tiny fragments to avoid noise', () => {
     expect(h('the')).toBe('the');
+  });
+});
+
+describe('escapeHtml', () => {
+  it('escapes the characters that matter inside innerHTML', () => {
+    expect(escapeHtml(`<a href="x">Tom & 'Jerry'</a>`)).toBe(
+      `&lt;a href=&quot;x&quot;&gt;Tom &amp; 'Jerry'&lt;/a&gt;`,
+    );
   });
 });

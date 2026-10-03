@@ -1,5 +1,5 @@
 const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
-const escapeHtml = (s: string) =>
+export const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 /** Text items shorter than this are skipped: "the" or "and" would light up all over the page. */

@@ -8,20 +8,13 @@ import { CitationPanel } from './citation-panel';
 // (`ssr: false`), which in jsdom resolves the (mocked) module asynchronously, so assertions on the
 // viewer use `findBy*`. The stub exposes the props the panel passes down.
 vi.mock('./pdf-viewer', () => ({
-  default: ({
-    documentId,
-    page,
-    passage,
-  }: {
-    documentId: string;
-    page: number;
-    passage: string;
-  }) => (
+  default: (props: { documentId: string; pageStart: number; pageEnd: number; passage: string }) => (
     <div
       data-testid="pdf-viewer"
-      data-document={documentId}
-      data-page={page}
-      data-passage={passage}
+      data-document={props.documentId}
+      data-page-start={props.pageStart}
+      data-page-end={props.pageEnd}
+      data-passage={props.passage}
     />
   ),
 }));
@@ -40,6 +33,13 @@ const source: SourceRef = {
   pageEnd: 3,
   content: 'C.3 Specified Disease Waiting Period\nCataract surgery is covered after 24 months.',
   rerankScore: 0.92,
+};
+const other: SourceRef = {
+  ...source,
+  chunkId: 'chunk-2',
+  clauseId: 'B.1',
+  pageStart: 2,
+  pageEnd: 2,
 };
 
 describe('CitationPanel', () => {
@@ -69,17 +69,39 @@ describe('CitationPanel', () => {
     expect(screen.queryByText(/›/)).toBeNull();
   });
 
-  it('opens the PDF viewer at the first page of the clause and toggles it closed', async () => {
+  it('opens the PDF viewer with the cited page range and toggles it closed', async () => {
     const user = userEvent.setup();
-    render(<CitationPanel source={source} onClose={() => {}} />);
+    render(<CitationPanel source={{ ...source, pageEnd: 4 }} onClose={() => {}} />);
     expect(screen.queryByTestId('pdf-viewer')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Open PDF at page 3' }));
     const viewer = await screen.findByTestId('pdf-viewer');
-    expect(viewer).toHaveAttribute('data-page', '3');
+    expect(viewer).toHaveAttribute('data-page-start', '3');
+    expect(viewer).toHaveAttribute('data-page-end', '4');
     expect(viewer).toHaveAttribute('data-document', 'doc-1');
     expect(viewer).toHaveAttribute('data-passage', source.content);
     await user.click(screen.getByRole('button', { name: 'Hide PDF' }));
     expect(screen.queryByTestId('pdf-viewer')).toBeNull();
+  });
+
+  it('closes the viewer when another clause is selected', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<CitationPanel source={source} onClose={() => {}} />);
+    await user.click(screen.getByRole('button', { name: 'Open PDF at page 3' }));
+    await screen.findByTestId('pdf-viewer');
+    rerender(<CitationPanel source={other} onClose={() => {}} />);
+    expect(screen.queryByTestId('pdf-viewer')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open PDF at page 2' })).toBeInTheDocument();
+  });
+
+  it('starts closed again when the same clause is reopened after the panel was dismissed', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<CitationPanel source={source} onClose={() => {}} />);
+    await user.click(screen.getByRole('button', { name: 'Open PDF at page 3' }));
+    await screen.findByTestId('pdf-viewer');
+    rerender(<CitationPanel source={null} onClose={() => {}} />);
+    rerender(<CitationPanel source={source} onClose={() => {}} />);
+    expect(screen.queryByTestId('pdf-viewer')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open PDF at page 3' })).toBeInTheDocument();
   });
 
   it('calls onClose from the close button', async () => {
@@ -88,5 +110,32 @@ describe('CitationPanel', () => {
     render(<CitationPanel source={source} onClose={onClose} />);
     await user.click(screen.getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('moves focus to the heading when a source opens or changes', () => {
+    const { rerender } = render(<CitationPanel source={source} onClose={() => {}} />);
+    const heading = screen.getByRole('heading', { name: 'Sample Health Shield' });
+    expect(heading).toHaveAttribute('tabindex', '-1');
+    expect(heading).toHaveFocus();
+    (document.activeElement as HTMLElement).blur();
+    rerender(<CitationPanel source={other} onClose={() => {}} />);
+    expect(screen.getByRole('heading', { name: 'Sample Health Shield' })).toHaveFocus();
+  });
+
+  it('closes on Escape', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(<CitationPanel source={source} onClose={onClose} />);
+    await user.keyboard('{Escape}'); // focus starts on the heading, inside the panel
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('is a labelled complementary region, or a non-modal dialog when shown as a sheet', () => {
+    const { rerender } = render(<CitationPanel source={source} onClose={() => {}} />);
+    const region = screen.getByRole('complementary', { name: 'Sample Health Shield' });
+    expect(region).not.toHaveAttribute('aria-modal');
+    rerender(<CitationPanel source={source} onClose={() => {}} sheet />);
+    const dialog = screen.getByRole('dialog', { name: 'Sample Health Shield' });
+    expect(dialog).toHaveAttribute('aria-modal', 'false');
   });
 });

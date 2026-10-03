@@ -4,7 +4,7 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import { API_URL } from '@/lib/config';
-import { makeHighlighter } from '@/lib/highlight';
+import { escapeHtml, makeHighlighter } from '@/lib/highlight';
 import { clearSession, ensureSession, loadSession } from '@/lib/session';
 
 // Configured once per page load, when this client-only module is first imported.
@@ -41,26 +41,28 @@ function useContainerWidth() {
 
 export default function PdfViewer({
   documentId,
-  page,
+  pageStart,
+  pageEnd,
   passage,
 }: {
   documentId: string;
-  page: number;
+  /** First page of the cited clause: where the viewer opens. */
+  pageStart: number;
+  /** Last page of the cited clause: highlighting is limited to pageStart..pageEnd. */
+  pageEnd: number;
   passage: string;
 }) {
   const [token, setToken] = useState<string | null>(null);
   const [noSession, setNoSession] = useState(false);
   const [numPages, setNumPages] = useState<number>();
-  const [current, setCurrent] = useState(page);
+  const [current, setCurrent] = useState(pageStart);
   const [containerRef, width] = useContainerWidth();
   const refreshed = useRef(false);
   const highlighter = useMemo(() => makeHighlighter(passage), [passage]);
-  // Stable identity: react-pdf redraws the text layer whenever the renderer changes.
-  const renderText = useCallback(({ str }: { str: string }) => highlighter(str), [highlighter]);
 
   useEffect(() => {
-    setCurrent(page);
-  }, [page]);
+    setCurrent(pageStart);
+  }, [pageStart]);
 
   useEffect(() => {
     let live = true;
@@ -76,7 +78,7 @@ export default function PdfViewer({
     () =>
       token
         ? {
-            url: `${API_URL}/documents/${documentId}/file`,
+            url: `${API_URL}/documents/${encodeURIComponent(documentId)}/file`,
             httpHeaders: { Authorization: `Bearer ${token}` },
           }
         : null,
@@ -99,6 +101,13 @@ export default function PdfViewer({
 
   // Never ask for a page the document does not have (a stale page range on a replaced PDF).
   const shown = numPages ? Math.min(Math.max(current, 1), numPages) : current;
+  // Only the cited pages are marked; elsewhere the text is just escaped. The renderer keeps one
+  // identity per (passage, cited-or-not) because react-pdf redraws the text layer when it changes.
+  const cited = shown >= pageStart && shown <= pageEnd;
+  const renderText = useCallback(
+    ({ str }: { str: string }) => (cited ? highlighter(str) : escapeHtml(str)),
+    [cited, highlighter],
+  );
   const unavailable = <p className="text-sm text-red-600">Could not load the PDF.</p>;
 
   return (
@@ -110,8 +119,21 @@ export default function PdfViewer({
           <p className={status}>Loading PDF…</p>
         )
       ) : (
-        <>
-          <div className="flex items-center gap-2 text-sm">
+        // react-pdf 11 suspends by default and then ignores `loading`/`error`/`onLoadError`, sending
+        // failures to the nearest error boundary (the whole app). `suspense={false}` gives the
+        // in-place states below; <Page> inherits it from <Document>. The pager is a child, so it
+        // only exists while a document is loaded (not while loading or after an error).
+        <Document
+          file={file}
+          suspense={false}
+          externalLinkTarget="_blank"
+          externalLinkRel="noopener noreferrer"
+          onLoadSuccess={({ numPages: n }) => setNumPages(n)}
+          onLoadError={onLoadError}
+          loading={<p className={status}>Loading PDF…</p>}
+          error={unavailable}
+        >
+          <div className="mb-2 flex items-center gap-2 text-sm">
             <button
               type="button"
               disabled={shown <= 1}
@@ -132,20 +154,14 @@ export default function PdfViewer({
               Next ›
             </button>
           </div>
-          <Document
-            file={file}
-            onLoadSuccess={({ numPages: n }) => setNumPages(n)}
-            onLoadError={onLoadError}
-            loading={<p className={status}>Loading PDF…</p>}
-            error={unavailable}
-          >
-            <Page
-              pageNumber={shown}
-              width={Math.min(width || DEFAULT_PAGE_WIDTH, MAX_PAGE_WIDTH)}
-              customTextRenderer={renderText}
-            />
-          </Document>
-        </>
+          <Page
+            pageNumber={shown}
+            width={Math.min(width || DEFAULT_PAGE_WIDTH, MAX_PAGE_WIDTH)}
+            customTextRenderer={renderText}
+            loading={<p className={status}>Loading page…</p>}
+            error={<p className="text-sm text-red-600">Could not show this page.</p>}
+          />
+        </Document>
       )}
     </div>
   );
