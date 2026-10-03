@@ -17,19 +17,39 @@ export interface RabbitConnection {
   close(): Promise<void>;
 }
 
-/** Crash-only: if the broker connection drops, `onClose` fires and the process should exit (Docker restarts it). */
+/**
+ * Crash-only: if the broker connection or channel drops, `onClose` fires and the process should exit
+ * (Docker restarts it). A failure during setup rejects instead - the caller already sees it - and the
+ * half-open connection is closed first.
+ */
 export async function connectRabbit(
   url: string,
   opts: { retryDelaysMs: number[]; onClose?: (err?: unknown) => void },
 ): Promise<RabbitConnection> {
   const connection = await amqp.connect(url);
-  const channel = await connection.createConfirmChannel();
-  await assertIngestTopology(channel, opts.retryDelaysMs);
   let closing = false;
-  connection.on('error', () => undefined); // a 'close' event always follows
-  connection.on('close', (err?: unknown) => {
-    if (!closing) opts.onClose?.(err);
-  });
+  let ready = false;
+  const report = (err?: unknown) => {
+    if (ready && !closing) opts.onClose?.(err);
+  };
+  // Registered straight away: an unhandled 'error' event would throw, and a drop during setup
+  // must not go unnoticed. A 'close' event always follows an 'error'.
+  connection.on('error', () => undefined);
+  connection.on('close', report);
+
+  let channel: ConfirmChannel;
+  try {
+    channel = await connection.createConfirmChannel();
+    channel.on('error', () => undefined);
+    channel.on('close', report);
+    await assertIngestTopology(channel, opts.retryDelaysMs);
+  } catch (err) {
+    closing = true;
+    await connection.close().catch(() => undefined);
+    throw err;
+  }
+  ready = true;
+
   return {
     connection,
     channel,

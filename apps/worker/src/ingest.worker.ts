@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {
   createModels,
+  describeError,
   ingestDocument,
   type DbEnv,
   type DbHandle,
@@ -42,6 +43,12 @@ export class IngestWorker implements OnApplicationBootstrap, OnApplicationShutdo
       db: this.database.db,
       retryDelaysMs: this.env.INGEST_RETRY_DELAYS_MS,
       logger: this.logger,
+      onFatal: (reason, err) => {
+        this.logger.error(
+          `${reason}${err ? `: ${describeError(err)}` : ''}; exiting so the supervisor restarts the worker`,
+        );
+        process.exit(1);
+      },
       ingest: (id) =>
         ingestDocument(
           {
@@ -59,8 +66,12 @@ export class IngestWorker implements OnApplicationBootstrap, OnApplicationShutdo
   }
 
   async onApplicationShutdown() {
-    await this.consumer?.stop();
-    await this.rabbit.close();
-    await this.database.pool.end();
+    try {
+      // let in-flight jobs finish and be acked before the channel and pool go away
+      await this.consumer?.stop();
+    } finally {
+      await this.rabbit.close();
+      await this.database.pool.end();
+    }
   }
 }

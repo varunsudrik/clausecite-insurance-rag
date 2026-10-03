@@ -47,9 +47,10 @@ export async function assertIngestTopology(
 }
 
 export function parseIngestJob(content: Buffer): IngestJob {
-  const value = JSON.parse(content.toString('utf8')) as Partial<IngestJob>;
-  if (typeof value.documentId !== 'string' || !Number.isInteger(value.attempt ?? 0)) {
+  const value = JSON.parse(content.toString('utf8')) as Partial<IngestJob> | null;
+  const attempt = value?.attempt ?? 0;
+  if (typeof value?.documentId !== 'string' || !Number.isInteger(attempt) || attempt < 0) {
     throw new Error('malformed ingest job');
   }
-  return { documentId: value.documentId, attempt: value.attempt ?? 0 };
+  return { documentId: value.documentId, attempt };
 }
