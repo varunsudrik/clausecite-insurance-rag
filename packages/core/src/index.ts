@@ -6,3 +6,5 @@ export { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 export * from './llm/models.js';
 export * from './llm/embed.js';
 export * from './llm/rerank.js';
+export * from './ingest/errors.js';
+export * from './ingest/pdf-lines.js';
