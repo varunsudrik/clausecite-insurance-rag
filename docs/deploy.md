@@ -4,7 +4,7 @@ One VM runs the whole stack with Docker Compose (`docker-compose.prod.yml`): Cad
 
 GitHub Actions does the rest. `ci.yml` runs on every push and pull request. When CI succeeds on `main`, `deploy.yml` builds the `api`, `worker` and `web` images, pushes them to GHCR tagged with the commit sha and `latest`, copies `docker-compose.prod.yml` and `docker/Caddyfile` to the server over SSH, pulls the three app images, runs `docker compose up -d`, waits for the app services (api, worker, web, Caddy), reloads Caddy so a changed `Caddyfile` takes effect, and finally polls `https://<domain>/api/health`. It does nothing until the repository variable `DEPLOY_ENABLED` is `true`.
 
-Replace `<domain>` and `<server-ip>` below with your own values.
+Replace `<domain>` and `<server-ip>` below with your own values. The code blocks contain `#` comment lines: in zsh (the macOS default), run `setopt interactivecomments` first, or pasting them fails.
 
 ## 0. Cap your spend first (DECISIONS 012)
 
@@ -29,7 +29,8 @@ chown deploy:deploy /home/deploy/.ssh/authorized_keys && chmod 600 /home/deploy/
 Create an `A` record for `<domain>` pointing at `<server-ip>` (and an `AAAA` record if the server has IPv6). Check it before the first deploy, because Caddy requests its Let's Encrypt certificate as soon as it starts:
 
 ```bash
-dig +short <domain>      # must print <server-ip>
+# must print <server-ip>
+dig +short <domain>
 ```
 
 ## 3. Lock the server down
@@ -77,9 +78,12 @@ ssh deploy@<server-ip> chmod 600 /opt/clausecite/.env.prod
 Generate every secret as URL-safe hex. Several end up inside connection URLs, and Compose interpolates `$`, so base64 characters (`+ / =`) and `$` break things:
 
 ```bash
-openssl rand -hex 24    # POSTGRES_PASSWORD, RABBITMQ_PASSWORD
-openssl rand -hex 32    # JWT_SECRET (the API refuses to start with fewer than 32 characters)
-openssl rand -hex 16    # ADMIN_PASSWORD, if you want a generated one (at least 12 characters)
+# POSTGRES_PASSWORD, RABBITMQ_PASSWORD
+openssl rand -hex 24
+# JWT_SECRET (the API refuses to start with fewer than 32 characters)
+openssl rand -hex 32
+# ADMIN_PASSWORD, if you want a generated one (at least 12 characters)
+openssl rand -hex 16
 ```
 
 Edit `/opt/clausecite/.env.prod` on the server and fill in every empty value (`.env.prod.example` documents each one):
@@ -118,15 +122,17 @@ ssh-copy-id -i ./clausecite-deploy.pub deploy@<server-ip>
 
 # Pin the server's host key (see the note below). Use exactly the value you store in DEPLOY_HOST.
 ssh-keyscan -t ed25519 <server-ip> > known_hosts.txt
-ssh-keygen -lf known_hosts.txt          # compare with the fingerprint printed on the server by:
-                                        #   ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub   (use the provider's web console)
+# compare this fingerprint with the one printed on the server (use the provider's web console) by:
+#   ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+ssh-keygen -lf known_hosts.txt
 
 gh secret set DEPLOY_HOST --body '<server-ip>'
 gh secret set DEPLOY_USER --body 'deploy'
 gh secret set DEPLOY_SSH_KEY < ./clausecite-deploy
 gh secret set DEPLOY_KNOWN_HOSTS < known_hosts.txt
 gh variable set DOMAIN --body '<domain>'
-gh variable set DEPLOY_PATH --body '/opt/clausecite'   # optional: this is the default
+# optional: /opt/clausecite is the default
+gh variable set DEPLOY_PATH --body '/opt/clausecite'
 rm ./clausecite-deploy ./clausecite-deploy.pub known_hosts.txt
 ```
 
@@ -146,7 +152,8 @@ rm ./clausecite-deploy ./clausecite-deploy.pub known_hosts.txt
 
 ```bash
 gh variable set DEPLOY_ENABLED --body true
-gh workflow run deploy.yml --ref main      # or push to main and let CI trigger it
+# or push to main and let CI trigger it
+gh workflow run deploy.yml --ref main
 gh run watch
 ```
 
@@ -158,6 +165,22 @@ A manual run only deploys when it is started on `main`; on any other ref the job
 - The smoke step then polls `https://<domain>/api/health` for up to three minutes and passes only on HTTP 200. The first certificate is issued while it polls.
 - Check by hand with `curl -fsS https://<domain>/api/health`, and open `https://<domain>` in a browser.
 
+**Updating infrastructure images.** Deploys never pull Caddy, Postgres, RabbitMQ or Redis (their tags float), so a security release of one of them does not arrive on its own. To take it on purpose, pull that one service and recreate only it:
+
+```bash
+cd /opt/clausecite
+docker compose -f docker-compose.prod.yml --env-file .env.prod pull caddy
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --no-deps caddy
+```
+
+Caddy keeps its certificates in the `caddy_data` volume. Recreating `postgres` restarts the database, so chat and search fail for a short while; the tag is `pg17`, so a pull brings minor releases only. Take a fresh backup first and copy it off-host (step 11), then, after the `up`, check `/api/health` and run `docker compose ... restart api worker` if they have not recovered:
+
+```bash
+(umask 077; docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T backup pg_dump -Fc > pre-upgrade.dump)
+docker compose -f docker-compose.prod.yml --env-file .env.prod pull postgres
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --no-deps postgres
+```
+
 ## 9. Load the policies (first ingest)
 
 Ingest from your laptop, not from the server. Do not run `pnpm sources:download` on the server: it re-downloads any PDF that is missing or whose hash differs from `data/sources.lock.json` and silently re-pins the lockfile to whatever the insurer serves today.
@@ -166,8 +189,9 @@ Ingest from your laptop, not from the server. Do not run `pnpm sources:download`
 # on your laptop, in the repository
 pnpm install
 pnpm sources:download
-git diff --stat data/sources.lock.json      # must print nothing: re-downloading unchanged bytes leaves the lock as it is,
-                                            # so any change means an insurer replaced a PDF (or data/sources.json changed)
+# must print nothing: re-downloading unchanged bytes leaves the lock as it is,
+# so any change means an insurer replaced a PDF (or data/sources.json changed)
+git diff --stat data/sources.lock.json
 
 # put the production ADMIN_EMAIL and ADMIN_PASSWORD (from .env.prod) in the git-ignored .env at the repo root,
 # in place of the local dev values, then:
@@ -184,7 +208,8 @@ API_URL=https://<domain>/api pnpm sources:ingest
 
   ```bash
   cd /opt/clausecite
-  docker compose -f docker-compose.prod.yml --env-file .env.prod exec api printenv TRUST_PROXY_HOPS   # 1
+  # must print 1
+  docker compose -f docker-compose.prod.yml --env-file .env.prod exec api printenv TRUST_PROXY_HOPS
   ```
 
 - [ ] The admin password is strong and not reused from anywhere else.
@@ -223,11 +248,15 @@ The policies in `data/sources.json` can always be re-ingested from your laptop (
 
 ## 12. Restore
 
-Stop the api and worker first, so nothing writes during the restore. On a rebuilt server, finish steps 1 to 8 first so that the schema exists, then restore over it. Put the dump where `deploy` can read it: `scp` your off-host copy to `/opt/clausecite/`, or for a dump that is still on the server run `docker cp clausecite-prod-backup-1:/backups/clausecite-2026-10-03.dump .` there.
+Stop the api and worker first, so nothing writes during the restore. On a rebuilt server, finish steps 1 to 8 first so that the schema exists, then restore over it. Read the sha that is running before you stop anything and keep it exported: `.env.prod` only holds `IMAGE_TAG=latest`, and `latest` may be a build that never went through a deploy. Put the dump where `deploy` can read it: `scp` your off-host copy to `/opt/clausecite/`, or for a dump that is still on the server run `docker cp clausecite-prod-backup-1:/backups/clausecite-2026-10-03.dump .` there.
 
 ```bash
 cd /opt/clausecite
 dc() { docker compose -f docker-compose.prod.yml --env-file .env.prod "$@"; }
+
+# the commit sha currently deployed
+export IMAGE_TAG=$(docker inspect --format '{{.Config.Image}}' clausecite-prod-api-1 | sed 's/.*://')
+echo "$IMAGE_TAG"
 
 dc stop api worker
 dc cp ./clausecite-2026-10-03.dump postgres:/tmp/restore.dump
@@ -242,7 +271,7 @@ dc up -d
 dc up -d --wait --wait-timeout 600 api worker web caddy
 ```
 
-Open a citation afterwards to confirm the PDF renders. Try this once on a scratch server before you depend on it.
+`echo "$IMAGE_TAG"` must print a 40-character sha; if it prints nothing, stop and find the sha (Actions, Deploy runs) before going on. The exported `IMAGE_TAG` pins both `up` commands to the deployed images. Open a citation afterwards to confirm the PDF renders. Try this once on a scratch server before you depend on it.
 
 ## 13. Day-2 operations
 
@@ -265,7 +294,8 @@ Migrations only move forward, so rolling back across one needs a database restor
 ```bash
 cd /opt/clausecite
 export IMAGE_TAG=$(docker inspect --format '{{.Config.Image}}' clausecite-prod-api-1 | sed 's/.*://')
-echo "$IMAGE_TAG"      # the commit sha currently deployed
+# the commit sha currently deployed
+echo "$IMAGE_TAG"
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --force-recreate --no-deps --wait --wait-timeout 600 api worker
 ```
 

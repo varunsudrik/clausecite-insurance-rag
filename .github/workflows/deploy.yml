@@ -188,7 +188,8 @@ jobs:
           # IMAGE_TAG exported here overrides the IMAGE_TAG in .env.prod (the shell wins over --env-file).
           # 1. pull only the three app images, so floating infra tags (postgres, caddy, ...) never get
           #    recreated by a deploy.
-          # 2. up -d creates or updates everything, backup included, without waiting on any health check.
+          # 2. up -d creates or updates everything, backup included. It honours depends_on (caddy waits for
+          #    api and web to be healthy) but never waits on backup.
           # 3. --wait on the app services only: a stale or unhealthy backup must not block a deploy.
           #    worker and caddy have no healthcheck, so for them --wait only proves "running".
           # 4. reload Caddy so the freshly copied docker/Caddyfile takes effect (a no-op if unchanged).
