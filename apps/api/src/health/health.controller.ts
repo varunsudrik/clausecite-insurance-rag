@@ -1,7 +1,8 @@
-import { INGEST_EXCHANGE, type DbHandle, type RabbitConnection } from '@clausecite/core';
+import type { DbHandle } from '@clausecite/core';
 import { Controller, Get, Inject, Logger, ServiceUnavailableException } from '@nestjs/common';
 import type { Redis } from 'ioredis';
 import { Public } from '../common/public.decorator.js';
+import type { RabbitPublisher } from '../infra/rabbit-publisher.js';
 import { DATABASE, RABBIT, REDIS } from '../infra/tokens.js';
 
 /** A dependency that has not answered within this long counts as down. */
@@ -39,7 +40,7 @@ export class HealthController {
   constructor(
     @Inject(DATABASE) private readonly database: DbHandle,
     @Inject(REDIS) private readonly redis: Redis,
-    @Inject(RABBIT) private readonly rabbit: RabbitConnection,
+    @Inject(RABBIT) private readonly rabbit: RabbitPublisher,
   ) {}
 
   @Public()
@@ -48,7 +49,12 @@ export class HealthController {
     const [db, redis, rabbitmq] = await Promise.all([
       probe('db', () => this.database.pool.query('select 1')),
       probe('redis', () => this.redis.ping()),
-      probe('rabbitmq', () => this.rabbit.channel.checkExchange(INGEST_EXCHANGE)),
+      probe('rabbitmq', async () => {
+        // checkHealthy never throws: it connects on demand and answers false when the broker is down.
+        if (!(await this.rabbit.checkHealthy(HEALTH_PROBE_TIMEOUT_MS))) {
+          throw new Error('broker unavailable');
+        }
+      }),
     ]);
     const checks = { db, redis, rabbitmq };
     if (!Object.values(checks).every(Boolean)) {

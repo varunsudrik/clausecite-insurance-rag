@@ -13,7 +13,6 @@ import {
   retrievalEnv,
   storageEnv,
   type DbHandle,
-  type RabbitConnection,
 } from '@clausecite/core';
 import {
   Global,
@@ -24,6 +23,7 @@ import {
   type OnApplicationShutdown,
 } from '@nestjs/common';
 import { Redis } from 'ioredis';
+import { RabbitPublisher } from './rabbit-publisher.js';
 import {
   API_ENV,
   CACHE_REDIS,
@@ -43,7 +43,7 @@ class InfraLifecycle implements OnApplicationShutdown {
     @Inject(DATABASE) private readonly database: DbHandle,
     @Inject(REDIS) private readonly redis: Redis,
     @Inject(CACHE_REDIS) private readonly cacheRedis: Redis,
-    @Inject(RABBIT) private readonly rabbit: RabbitConnection,
+    @Inject(RABBIT) private readonly rabbit: RabbitPublisher,
   ) {}
   async onApplicationShutdown() {
     // Concurrent and independent: one slow or failing dependency must not keep the others open.
@@ -110,16 +110,16 @@ class InfraLifecycle implements OnApplicationShutdown {
       },
     },
     {
+      // Lazy and reconnecting (DECISIONS 011): nothing connects at boot, and a broker that is down or
+      // restarts costs uploads a 503 and /health a `rabbitmq: false`, never the process.
       provide: RABBIT,
       inject: [API_ENV],
       useFactory: (env: ApiConfig) =>
-        connectRabbit(env.RABBITMQ_URL, {
-          retryDelaysMs: env.INGEST_RETRY_DELAYS_MS,
-          onClose: () => {
-            logger.error('RabbitMQ connection closed; exiting so the supervisor restarts the API');
-            process.exit(1);
-          },
-        }),
+        new RabbitPublisher(
+          (onClose) =>
+            connectRabbit(env.RABBITMQ_URL, { retryDelaysMs: env.INGEST_RETRY_DELAYS_MS, onClose }),
+          new Logger('Rabbit'),
+        ),
     },
     { provide: MODELS, inject: [API_ENV], useFactory: (env: ApiConfig) => createModels(env) },
     {

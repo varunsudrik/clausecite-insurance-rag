@@ -1,7 +1,8 @@
-import type { DbHandle, RabbitConnection } from '@clausecite/core';
+import type { DbHandle } from '@clausecite/core';
 import { Logger, ServiceUnavailableException } from '@nestjs/common';
 import type { Redis } from 'ioredis';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RabbitPublisher } from '../infra/rabbit-publisher.js';
 import { HEALTH_PROBE_TIMEOUT_MS, HealthController } from './health.controller.js';
 
 const never = () => new Promise<never>(() => undefined);
@@ -9,14 +10,12 @@ const never = () => new Promise<never>(() => undefined);
 const makeController = (fakes: {
   query?: () => Promise<unknown>;
   ping?: () => Promise<unknown>;
-  checkExchange?: () => Promise<unknown>;
+  checkHealthy?: (timeoutMs: number) => Promise<boolean>;
 }) =>
   new HealthController(
     { pool: { query: fakes.query ?? (async () => ({ rows: [] })) } } as unknown as DbHandle,
     { ping: fakes.ping ?? (async () => 'PONG') } as unknown as Redis,
-    {
-      channel: { checkExchange: fakes.checkExchange ?? (async () => ({})) },
-    } as unknown as RabbitConnection,
+    { checkHealthy: fakes.checkHealthy ?? (async () => true) } as unknown as RabbitPublisher,
   );
 
 /** Runs check() and returns whatever it settles with (resolved value or thrown error). */
@@ -47,12 +46,24 @@ describe('HealthController', () => {
     expect(vi.getTimerCount()).toBe(0); // probe timeouts are cleared once the probes settle
   });
 
+  it('reports rabbitmq: false (503) when the publisher says the broker is unhealthy', async () => {
+    const checkHealthy = vi.fn(async (_timeoutMs: number) => false);
+    const outcome = await settle(makeController({ checkHealthy }));
+    expect(checkHealthy).toHaveBeenCalledWith(HEALTH_PROBE_TIMEOUT_MS);
+    const error = (outcome as { error: unknown }).error;
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect((error as ServiceUnavailableException).getResponse()).toEqual({
+      status: 'degraded',
+      checks: { db: true, redis: true, rabbitmq: false },
+    });
+  });
+
   it('degrades within the probe timeout when redis rejects and rabbit never answers', async () => {
     const controller = makeController({
       ping: async () => {
         throw new Error('redis down');
       },
-      checkExchange: never,
+      checkHealthy: never,
     });
     let outcome: Awaited<ReturnType<typeof settle>> | undefined;
     void settle(controller).then((o) => (outcome = o));
@@ -77,7 +88,7 @@ describe('HealthController', () => {
   });
 
   it('probes concurrently: three hung dependencies cost one timeout, not three', async () => {
-    const controller = makeController({ query: never, ping: never, checkExchange: never });
+    const controller = makeController({ query: never, ping: never, checkHealthy: never });
     let outcome: Awaited<ReturnType<typeof settle>> | undefined;
     void settle(controller).then((o) => (outcome = o));
 

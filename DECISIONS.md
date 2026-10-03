@@ -58,11 +58,12 @@ Short records of choices that refine or deviate from the design spec, with the r
 **Why:** the client cannot inject or rewrite history, and citations are validated against sources the server itself retrieved.
 **Consequence:** Phase 1B web work must configure `prepareSendMessagesRequest` (send the last user message plus `conversationId`); the stream's final `data-meta` carries the validated `answer` and a refusal's `suggestions` so the UI does not depend on the raw deltas.
 
-## 011 — API currently crash-only on broker loss (to change in Phase 1B)
+## 011 — API currently crash-only on broker loss (resolved in Phase 1B)
 
 **Context:** the API reuses `connectRabbit`'s crash-only `onClose` (decision 004), but unlike the worker it needs the broker only for uploads and re-ingest.
 **Problem:** a broker restart kills in-flight chat streams, and the API crash-loops for as long as the broker is down, taking `/chat` and `/search` with it.
 **Planned (Phase 1B):** log the close instead of exiting, report `rabbitmq: false` on `/health`, reconnect lazily on publish and answer `503` if that fails.
+**Resolution:** the API now uses a lazy, reconnecting `RabbitPublisher`; it boots and serves chat/search without the broker, `/health` reports `rabbitmq: false`, uploads return 503 until the broker is back. The worker remains crash-only.
 
 ## 012 — Spend protection is a Phase 1B deploy gate
 

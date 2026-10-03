@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { DbHandle, DocumentRow, RabbitConnection } from '@clausecite/core';
+import type { DbHandle, DocumentRow } from '@clausecite/core';
 import {
   BadRequestException,
   ConflictException,
@@ -10,6 +10,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BrokerUnavailableError, type RabbitPublisher } from '../infra/rabbit-publisher.js';
 import type { ApiConfig } from '../infra/tokens.js';
 import { DocumentsService, errorCode, toPublicDocument } from './documents.service.js';
 
@@ -65,13 +66,10 @@ afterEach(async () => {
 });
 
 function makeService(db: unknown, publishError?: Error) {
-  const publish = vi.fn(
-    (_e: string, _k: string, _c: Buffer, _o: unknown, cb: (err: Error | null) => void) => {
-      cb(publishError ?? null);
-      return true;
-    },
-  );
-  const rabbit = { channel: { publish } } as unknown as RabbitConnection;
+  const publish = vi.fn(async (_documentId: string) => {
+    if (publishError) throw publishError;
+  });
+  const rabbit = { publishIngestJob: publish } as unknown as RabbitPublisher;
   const service = new DocumentsService({ db } as unknown as DbHandle, rabbit, {
     STORAGE_DIR: storageDir,
   } as ApiConfig);
@@ -128,6 +126,17 @@ describe('DocumentsService.upload', () => {
     await expect(service.upload(PDF, META)).rejects.toBeInstanceOf(ServiceUnavailableException);
     expect(del).toHaveBeenCalledOnce();
     expect(await readdir(storageDir)).toEqual([`${SHA}.pdf`]);
+  });
+
+  it('treats an unreachable broker like any other enqueue failure: row deleted, 503', async () => {
+    const { db, del } = fakeDb({ selects: [[], []] });
+    const { service, publish } = makeService(
+      db,
+      new BrokerUnavailableError('RabbitMQ unavailable: ECONNREFUSED'),
+    );
+    await expect(service.upload(PDF, META)).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(publish).toHaveBeenCalledWith('doc-1');
+    expect(del).toHaveBeenCalledOnce();
   });
 
   it('marks the row failed when the rollback delete also fails', async () => {

@@ -7,10 +7,8 @@ import {
   documents,
   eq,
   inArray,
-  publishIngestJob,
   type DbHandle,
   type DocumentRow,
-  type RabbitConnection,
   type UserRole,
 } from '@clausecite/core';
 import {
@@ -22,6 +20,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import type { RabbitPublisher } from '../infra/rabbit-publisher.js';
 import { API_ENV, DATABASE, RABBIT, type ApiConfig } from '../infra/tokens.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -75,7 +74,7 @@ export class DocumentsService {
 
   constructor(
     @Inject(DATABASE) private readonly database: DbHandle,
-    @Inject(RABBIT) private readonly rabbit: RabbitConnection,
+    @Inject(RABBIT) private readonly rabbit: RabbitPublisher,
     @Inject(API_ENV) private readonly env: ApiConfig,
   ) {}
 
@@ -206,7 +205,7 @@ export class DocumentsService {
     }
 
     try {
-      await publishIngestJob(this.rabbit.channel, doc.id);
+      await this.rabbit.publishIngestJob(doc.id);
     } catch (err) {
       // Never leave a 'queued' row nobody will process: a retried upload would dedupe onto it.
       // The content-addressed file is kept; the retry reuses it.
@@ -231,7 +230,7 @@ export class DocumentsService {
       .where(eq(documents.id, doc.id))
       .returning();
     try {
-      await publishIngestJob(this.rabbit.channel, doc.id);
+      await this.rabbit.publishIngestJob(doc.id);
     } catch (err) {
       this.logger.error(`could not enqueue re-ingest job for ${doc.id}: ${messageOf(err)}`);
       await this.markEnqueueFailed(doc.id, err);

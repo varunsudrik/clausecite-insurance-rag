@@ -46,24 +46,15 @@ const upload = (
     .attach('file', file, { filename: 'policy.pdf', contentType });
 
 const nextJob = async () => {
-  const msg = await h.rabbit.channel.get(INGEST_QUEUE, { noAck: true });
+  const msg = await h.inspect.channel.get(INGEST_QUEUE, { noAck: true });
   return msg ? JSON.parse(msg.content.toString()) : null;
 };
 
 const storedFiles = async () => (await readdir(h.storageDir)).sort();
 
-/** Makes every confirm-channel publish fail the way a broker nack / closed channel would. */
+/** Makes every ingest publish fail the way a nack or an unreachable broker would. */
 const failPublishes = () =>
-  vi.spyOn(h.rabbit.channel, 'publish').mockImplementation(((
-    _exchange: string,
-    _routingKey: string,
-    _content: Buffer,
-    _options: unknown,
-    callback?: (err: Error | null) => void,
-  ) => {
-    callback?.(new Error('broker nack'));
-    return true;
-  }) as never);
+  vi.spyOn(h.rabbit, 'publishIngestJob').mockRejectedValue(new Error('broker nack'));
 
 const as = (token: string) => ({ Authorization: `Bearer ${token}` });
 

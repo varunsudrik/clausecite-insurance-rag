@@ -1,7 +1,13 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Db, Models, RabbitConnection, Reranker } from '@clausecite/core';
+import {
+  connectRabbit,
+  type Db,
+  type Models,
+  type RabbitConnection,
+  type Reranker,
+} from '@clausecite/core';
 import {
   fakeReranker,
   mockChatModel,
@@ -10,20 +16,26 @@ import {
 } from '@clausecite/core/testing';
 import type { INestApplication } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
-import { RabbitMQContainer } from '@testcontainers/rabbitmq';
+import { RabbitMQContainer, type StartedRabbitMQContainer } from '@testcontainers/rabbitmq';
 import { RedisContainer } from '@testcontainers/redis';
 import type { Redis } from 'ioredis';
 import request from 'supertest';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/bootstrap.js';
-import { MODELS, RABBIT, REDIS, RERANKER } from '../src/infra/tokens.js';
+import type { RabbitPublisher } from '../src/infra/rabbit-publisher.js';
+import { API_ENV, MODELS, RABBIT, REDIS, RERANKER, type ApiConfig } from '../src/infra/tokens.js';
 
 export interface Harness {
   app: INestApplication;
   http: ReturnType<typeof request>;
   db: Db;
   redis: Redis;
-  rabbit: RabbitConnection;
+  /** The app's own (lazy, reconnecting) publisher: what the API publishes through. */
+  rabbit: RabbitPublisher;
+  /** A separate broker connection owned by the harness, for reading queues in tests. */
+  inspect: RabbitConnection;
+  /** Stop it to simulate losing the broker; `stop()` tolerates an already-stopped container. */
+  rabbitContainer: StartedRabbitMQContainer;
   storageDir: string;
   stop(): Promise<void>;
 }
@@ -62,11 +74,14 @@ export async function startHarness(
 
   let app: INestApplication | undefined;
   let moduleRef: TestingModule | undefined;
+  let inspect: RabbitConnection | undefined;
   let storageDir: string | undefined;
   // Always runs to the end: containers and the temp dir are released even if closing the app throws.
-  // Cleanup failures of the containers themselves are best-effort (testcontainers' reaper is the net).
+  // Cleanup failures of the containers themselves are best-effort (testcontainers' reaper is the net),
+  // which is also what lets a test stop the broker container itself.
   const teardown = async () => {
     try {
+      await inspect?.close();
       await (app ?? moduleRef)?.close();
     } finally {
       await Promise.allSettled([
@@ -109,12 +124,19 @@ export async function startHarness(
     app = configureApp(moduleRef.createNestApplication());
     await app.init();
     const ready = app;
+    // The API connects to the broker lazily, so the harness asserts the same topology itself: tests
+    // read the ingest queue through this connection and never touch the publisher's private channel.
+    inspect = await connectRabbit(mq.getAmqpUrl(), {
+      retryDelaysMs: ready.get<ApiConfig>(API_ENV).INGEST_RETRY_DELAYS_MS,
+    });
     return {
       app: ready,
       http: request(ready.getHttpServer()),
       db: pg.db,
       redis: ready.get(REDIS),
-      rabbit: ready.get(RABBIT),
+      rabbit: ready.get<RabbitPublisher>(RABBIT),
+      inspect,
+      rabbitContainer: mq,
       storageDir,
       stop: teardown,
     };
