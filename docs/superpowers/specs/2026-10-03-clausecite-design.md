@@ -3,6 +3,7 @@
 - **Date:** 2026-10-03
 - **Owner:** Varun Sudrik
 - **Status:** Approved in brainstorming; pending written-spec review
+- **Implementation refinements:** see `DECISIONS.md` at the repo root (retry topology, SQL shape, list markers, queue client, file paths).
 - **Working name:** ClauseCite (renameable)
 - **Planning:** Phase 1 (§2–§5, §7–§11, days 1–7) and Phase 2 (§6, days 8–14) each get
   their own implementation plan. Phase 1 is planned and built first.
