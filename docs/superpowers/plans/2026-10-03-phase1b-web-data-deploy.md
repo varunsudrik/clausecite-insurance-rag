@@ -2039,7 +2039,7 @@ Co-Authored-By: <model> <noreply@anthropic.com>"
    - fail-closed limits with global spend cap
    - crash-only worker vs reconnecting API publisher
 5. **Tech stack** table.
-6. **Run it locally**: prerequisites (Node ≥ 22.12, pnpm via corepack, Docker); `cp .env.example .env` and which values to fill (OpenRouter key, `JWT_SECRET` via openssl, `ADMIN_PASSWORD` ≥ 12); `pnpm install`, `pnpm infra:up`, `pnpm db:migrate`, `pnpm build`; run worker/api/web; `pnpm sources:download && pnpm sources:ingest`; open http://localhost:3000.
+6. **Run it locally**: prerequisites (Node ≥ 22.18, pnpm via corepack, Docker); `cp .env.example .env` and which values to fill (OpenRouter key, `JWT_SECRET` via openssl, `ADMIN_PASSWORD` ≥ 12); `pnpm install`, `pnpm infra:up`, `pnpm db:migrate`, `pnpm build`; run worker/api/web; `pnpm sources:download && pnpm sources:ingest`; open http://localhost:3000.
 7. **Testing**: `pnpm test`, `pnpm test:int` (Docker), what they cover, plus the approximate test counts **measured by running them** (state the numbers you observed).
 8. **Deploying**: link `docs/deploy.md`.
 9. **Roadmap**: Phase 2 (eval harness with Recall@k/faithfulness/citation precision in CI, agent mode, MCP server, Langfuse tracing). State that metrics will be published from the eval reports.

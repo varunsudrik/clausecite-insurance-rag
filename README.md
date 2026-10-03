@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/varunsudrik/clausecite-insurance-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/varunsudrik/clausecite-insurance-rag/actions/workflows/ci.yml)
 
-**An insurance-policy RAG copilot that answers questions about health-insurance policy wordings with clause-level citations, and refuses when the policies do not contain the answer.**
+**A RAG copilot for health-insurance policies: it answers questions with clause-level citations and refuses when the policies do not contain the answer.**
 
 Status: Phase 1 (ingestion, hybrid retrieval, cited streaming chat, the web UI and the production deploy tooling) is implemented. Phase 2 (evaluation harness, agent mode, MCP server, tracing) is next; see the [Roadmap](#roadmap). There is no public demo URL yet.
 
@@ -14,7 +14,7 @@ Status: Phase 1 (ingestion, hybrid retrieval, cited streaming chat, the web UI a
 
 Visitors chat without signing up (a guest token is issued on the first visit); only the admin can upload.
 
-**Demo corpus.** Twelve public Indian health-insurance policy wordings from ten insurers are listed in [`data/sources.json`](data/sources.json) and pinned by sha256 in [`data/sources.lock.json`](data/sources.lock.json). The PDFs themselves are downloaded to the git-ignored `data/pdfs/sources/` and never committed. A count in the local dev database on 2026-10-03 (the synthetic test fixture excluded) gave 12 documents, 467 pages and 1,234 chunks. The initial ingest reported about 335k embedding tokens, roughly $0.007.
+**Demo corpus.** Twelve public Indian health-insurance policy wordings from ten insurers are listed in [`data/sources.json`](data/sources.json) and recorded by sha256 in [`data/sources.lock.json`](data/sources.lock.json). The PDFs themselves are downloaded to the git-ignored `data/pdfs/sources/` and never committed. A count in the local dev database on 2026-10-03 (the synthetic test fixture excluded) gave 12 documents, 467 pages and 1,234 chunks. The 1,234 stored chunks total about 379k tokens (cl100k_base, `sum(chunks.token_count)`), which is about $0.008 to embed at text-embedding-3-small's $0.02 per 1M tokens list price.
 
 ## Architecture
 
@@ -37,7 +37,7 @@ The browser loads the Next.js app and calls the API through Caddy at `/api`. In 
 
 ### Ingest path
 
-1. `POST /documents` (admin, multipart, up to 20 MB) checks the `%PDF-` magic bytes and hashes the file. An identical upload returns the existing document. Otherwise the API writes `<sha256>.pdf` to storage, inserts a `queued` row and publishes `{ documentId }` on a RabbitMQ confirm channel.
+1. `POST /documents` (admin, multipart, up to 20 MB) checks the `%PDF-` magic bytes and hashes the file. An identical upload returns the existing document. Otherwise the API writes `<sha256>.pdf` to storage, inserts a `queued` row and publishes `{ documentId, attempt: 0 }` on a RabbitMQ confirm channel.
 2. The worker (prefetch 2) extracts positioned text with pdf.js, rebuilds lines, drops repeated headers and footers, sanitizes the text and rejects PDFs without a text layer.
 3. It builds a section tree from the detected headings, chunks it per clause, and embeds the chunks in batches of 100.
 4. One transaction locks the document row, replaces its chunks and marks it `ready`. The message is acked after the commit.
@@ -63,16 +63,16 @@ The browser loads the Next.js app and calls the API through Caddy at `/api`. In 
 
 ## Engineering highlights
 
-- **Per-delay retry queues:** one `ingest.document.retry.<ms>` queue per delay with a queue-level TTL, because RabbitMQ expires only the head of a queue and a 300 s message would block the 10 s retries behind it ([DECISIONS 001](DECISIONS.md#001--one-retry-queue-per-delay)). [`packages/core/src/queue/topology.ts`](packages/core/src/queue/topology.ts)
-- **Row lock against duplicate chunks:** the chunk-replace transaction starts with `SELECT … FOR UPDATE` on the document row, so a redelivery overlapping a running ingest cannot interleave delete and insert; a test reproduced 12 chunks instead of 6 without it. [`packages/core/src/ingest/ingest-document.ts`](packages/core/src/ingest/ingest-document.ts)
-- **`dist + 0` exact ranking under relaxed HNSW:** with `relaxed_order` the index may emit rows slightly out of order, so the vector rank is computed over `ORDER BY dist + 0`, which forces a real sort of the (at most 30) candidates; an integration test pins it with `ef_search = 1`. [`packages/core/src/retrieval/search.ts`](packages/core/src/retrieval/search.ts)
-- **Prompt-injection escaping:** every `<` and `>` in retrieved text is escaped so a PDF cannot close or forge a `<source>` tag, and attribute values also have control and line-separator characters flattened. [`packages/core/src/generation/prompts.ts`](packages/core/src/generation/prompts.ts)
-- **Fail-closed limits with a global spend cap:** per-user and per-IP windows (IPv6 bucketed by /64), per-guest and deployment-wide daily token budgets, and a flat charge on every search and refusal; a Redis error or a non-numeric counter rejects the request ([DECISIONS 012](DECISIONS.md#012--spend-protection-is-a-phase-1b-deploy-gate-implemented)). [`apps/api/src/limits/limits.service.ts`](apps/api/src/limits/limits.service.ts)
-- **Crash-only worker vs reconnecting API publisher:** the worker exits on broker loss and lets Docker restart it, while the API connects lazily, shares one connect attempt, times out after 5 s and reconnects on next use, so chat and search keep working during a broker outage and only uploads return 503 ([DECISIONS 004](DECISIONS.md#004--plain-amqplib-with-a-crash-only-worker), [011](DECISIONS.md#011--api-currently-crash-only-on-broker-loss-resolved-in-phase-1b)). [`apps/api/src/infra/rabbit-publisher.ts`](apps/api/src/infra/rabbit-publisher.ts), [`apps/worker/src/worker.module.ts`](apps/worker/src/worker.module.ts)
-- **pdf.js text sanitization:** one policy in the corpus maps the "ffi" ligature to U+0000, which Postgres `text` rejects; text is NFKC-normalized and stripped of control characters, and Postgres data errors (SQLSTATE class 22) become a non-retryable `CHUNK_DATA_INVALID` instead of three wasted retries. [`packages/core/src/ingest/text-sanitize.ts`](packages/core/src/ingest/text-sanitize.ts), [`packages/core/src/ingest/errors.ts`](packages/core/src/ingest/errors.ts)
-- **Citations open the PDF at the cited page:** react-pdf renders the authenticated file and a custom text renderer wraps the cited passage in `<mark>`, escaping every text item and limiting the highlight to the cited page range. [`apps/web/src/components/pdf-viewer.tsx`](apps/web/src/components/pdf-viewer.tsx), [`apps/web/src/lib/highlight.ts`](apps/web/src/lib/highlight.ts)
-- **Deploys exactly the commit CI tested:** under `workflow_run` the deploy builds `workflow_run.head_sha` (not the branch tip), tags images with that sha, and refuses any run that was not a push to this repository, such as a pull request from a fork's `main`. [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)
-- **Crash-safe backups:** the daily `pg_dump` writes to a temporary file that is renamed only on success, so a failed run never replaces the last good dump; a healthcheck turns unhealthy when the newest dump is missing, empty or older than 26 h. [`docker-compose.prod.yml`](docker-compose.prod.yml)
+- **Per-delay retry queues.** Each delay gets its own `ingest.document.retry.<ms>` queue with a queue-level TTL. RabbitMQ expires only the head of a queue, so on a shared queue a 300 s message would block the 10 s retries behind it ([DECISIONS 001](DECISIONS.md#001--one-retry-queue-per-delay)). [`packages/core/src/queue/topology.ts`](packages/core/src/queue/topology.ts)
+- **Row lock against duplicate chunks.** The chunk-replace transaction starts with `SELECT … FOR UPDATE` on the document row, so a redelivery that overlaps a running ingest cannot interleave delete and insert. Without the lock, a test reproduced 12 chunks instead of 6 ([DECISIONS 006](DECISIONS.md#006--lock-the-document-row-during-chunk-replace)). [`packages/core/src/ingest/ingest-document.ts`](packages/core/src/ingest/ingest-document.ts)
+- **`dist + 0` exact ranking under relaxed HNSW.** With `relaxed_order` the index may emit rows slightly out of order, so the vector rank is computed over `ORDER BY dist + 0`, which forces a real sort of the (at most 30) candidates. An integration test pins this with `ef_search = 1`. [`packages/core/src/retrieval/search.ts`](packages/core/src/retrieval/search.ts)
+- **Prompt-injection escaping.** Every `<` and `>` in retrieved text is escaped, so a PDF cannot close or forge a `<source>` tag. Attribute values are escaped too, with control and line-separator characters flattened. [`packages/core/src/generation/prompts.ts`](packages/core/src/generation/prompts.ts)
+- **Fail-closed limits with a global spend cap.** Redis holds per-user and per-IP rate windows (IPv6 bucketed by /64) and per-guest and deployment-wide daily token budgets. A Redis error or a non-numeric counter rejects the request. Every search, and every chat that reaches retrieval (answered or refused), also pays a flat token charge ([DECISIONS 012](DECISIONS.md#012--spend-protection-is-a-phase-1b-deploy-gate-implemented)). [`apps/api/src/limits/limits.service.ts`](apps/api/src/limits/limits.service.ts)
+- **Crash-only worker vs reconnecting API publisher.** The worker exits on broker loss and lets Docker restart it ([DECISIONS 004](DECISIONS.md#004--plain-amqplib-with-a-crash-only-worker)). The API connects lazily, shares one connect attempt, times out after 5 s and reconnects on next use ([DECISIONS 011](DECISIONS.md#011--api-currently-crash-only-on-broker-loss-resolved-in-phase-1b)). During a broker outage, chat, search and document reads keep working. Uploads and re-ingest answer 503, and `/health` answers 503 `degraded` with `rabbitmq: false`. [`apps/api/src/infra/rabbit-publisher.ts`](apps/api/src/infra/rabbit-publisher.ts), [`apps/worker/src/worker.module.ts`](apps/worker/src/worker.module.ts)
+- **pdf.js text sanitization.** One policy in the corpus maps the "ffi" ligature to U+0000, which Postgres `text` rejects. Extracted text is now NFKC-normalized and stripped of control characters. Postgres data errors (SQLSTATE class 22) become a non-retryable `CHUNK_DATA_INVALID`, so they are no longer retried. [`packages/core/src/ingest/text-sanitize.ts`](packages/core/src/ingest/text-sanitize.ts), [`packages/core/src/ingest/errors.ts`](packages/core/src/ingest/errors.ts)
+- **Citations open the PDF at the cited page.** react-pdf renders the file with the user's bearer token. A custom text renderer marks the PDF text items that occur in the cited passage, on the cited pages only, and HTML-escapes every item. [`apps/web/src/components/pdf-viewer.tsx`](apps/web/src/components/pdf-viewer.tsx), [`apps/web/src/lib/highlight.ts`](apps/web/src/lib/highlight.ts)
+- **Deploys exactly the commit CI tested.** Under `workflow_run`, the deploy builds and tags images from `workflow_run.head_sha`, not the branch tip. It refuses any run that was not a push to this repository, such as a pull request from a fork's `main`. [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)
+- **Crash-safe backups.** The daily `pg_dump` writes to a temporary file that is renamed only on success, so a failed run never replaces the last good dump. A healthcheck turns unhealthy when the newest dump is missing, empty or older than 26 h. [`docker-compose.prod.yml`](docker-compose.prod.yml)
 
 ## Tech stack
 
@@ -110,7 +110,7 @@ docs            deploy guide, design spec and implementation plans
 
 ## Run it locally
 
-**Prerequisites:** Node.js 22.12 or later, pnpm through Corepack (`corepack enable`; the pnpm version is pinned by the `packageManager` field), Docker with Compose v2, and an [OpenRouter](https://openrouter.ai/keys) API key.
+**Prerequisites:** Node.js 22.18 or later (CI and the Docker images use 24), pnpm through Corepack (`corepack enable`; the pnpm version is pinned by the `packageManager` field), Docker with Compose v2, and an [OpenRouter](https://openrouter.ai/keys) API key.
 
 ```bash
 corepack enable
@@ -141,8 +141,9 @@ pnpm --filter @clausecite/web dev        # http://localhost:3000
 Load the demo policies:
 
 ```bash
-pnpm sources:download   # PDFs to data/pdfs/sources/, sha256 and size recorded in data/sources.lock.json
-pnpm sources:ingest     # verifies each hash, uploads as the admin, waits until every document is ready
+pnpm sources:download            # to data/pdfs/sources/; files matching the lock are skipped, others downloaded and re-pinned
+git diff data/sources.lock.json  # empty unless a PDF or its URL changed since the lock was recorded
+pnpm sources:ingest              # checks each PDF against its locked sha256, uploads as the admin, waits for ready or failed
 ```
 
 Open http://localhost:3000. `pnpm infra:down` stops the containers.

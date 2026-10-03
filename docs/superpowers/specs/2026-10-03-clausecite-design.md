@@ -3,7 +3,7 @@
 - **Date:** 2026-10-03
 - **Owner:** Varun Sudrik
 - **Status:** Phase 1 implemented; Phase 2 pending
-- **Implementation refinements:** see `DECISIONS.md` at the repo root (retry topology, SQL shape, list markers, queue client, file paths).
+- **Precedence:** where this spec and `DECISIONS.md` (repo root) differ, `DECISIONS.md` wins: notably 001 (retry topology), 002 (hybrid SQL), 004 (queue client), 008 (admin seeding; API key deferred), 010 (chat contract) and 011–012 (broker resilience, spend protection).
 - **Working name:** ClauseCite (renameable)
 - **Planning:** Phase 1 (§2–§5, §7–§11, days 1–7) and Phase 2 (§6, days 8–14) each get
   their own implementation plan. Phase 1 is planned and built first.

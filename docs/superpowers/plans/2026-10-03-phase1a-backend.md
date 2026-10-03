@@ -6,7 +6,7 @@
 
 **Architecture:** A pnpm + Turborepo monorepo. `packages/core` holds all framework-free domain logic: config, DB schema, LLM wiring, ingestion, retrieval, generation, queue topology. `apps/worker` (NestJS standalone context) consumes ingestion jobs. `apps/api` (NestJS HTTP) serves REST + SSE. Postgres/pgvector, RabbitMQ and Redis run in Docker Compose.
 
-**Tech Stack:** Node ≥ 22.12 (dev machine: 26), pnpm 10, Turborepo 2, TypeScript ^6.0.2, NestJS ^12 (ESM), Vitest ^4.1.2, AI SDK `ai` ^7 + `@openrouter/ai-sdk-provider` ^3.1, zod ^4, drizzle-orm ^0.45 + drizzle-kit ^0.31, pg ^8, amqplib ^0.10, ioredis, pdfjs-dist ^6, js-tiktoken ^1, argon2, @nestjs/jwt ^12, Testcontainers ^12.
+**Tech Stack:** Node ≥ 22.18 (dev machine: 26), pnpm 10, Turborepo 2, TypeScript ^6.0.2, NestJS ^12 (ESM), Vitest ^4.1.2, AI SDK `ai` ^7 + `@openrouter/ai-sdk-provider` ^3.1, zod ^4, drizzle-orm ^0.45 + drizzle-kit ^0.31, pg ^8, amqplib ^0.10, ioredis, pdfjs-dist ^6, js-tiktoken ^1, argon2, @nestjs/jwt ^12, Testcontainers ^12.
 
 **Spec:** `docs/superpowers/specs/2026-10-03-clausecite-design.md`. Read it before starting any task.
 
@@ -105,7 +105,7 @@ data/fixtures/sample-policy.pdf   synthetic, committed
   "name": "clausecite",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.12" },
+  "engines": { "node": ">=22.18" },
   "scripts": {
     "build": "turbo run build",
     "test": "turbo run test",
