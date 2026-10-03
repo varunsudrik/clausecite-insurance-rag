@@ -1,12 +1,14 @@
 // Usage: pnpm sources:ingest [--reingest-failed]
 // Uploads every PDF listed in data/sources.lock.json (see `pnpm sources:download`) through the API
 // as the admin, then polls GET /documents until each reaches ready or failed. The worker must be
-// running (it consumes the ingest jobs). Env: ADMIN_EMAIL, ADMIN_PASSWORD, API_URL (default http://localhost:3001).
+// running (it consumes the ingest jobs). Env: ADMIN_EMAIL, ADMIN_PASSWORD, API_URL (default http://localhost:3001;
+// plain http is refused for any host except localhost, 127.0.0.1 and [::1], because the credentials go over it).
 // With --reingest-failed, documents the API already holds in the `failed` state (for example after a parser fix) are
 // queued again via POST /documents/:id/reingest. Exit code 1 if any document failed to upload or ingest. Never prints the password or the token.
 import { readFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { apiUrlProblem } from './lib/api-url.ts';
 import { parseLock, parseSources, sha256Hex, type Source } from './lib/sources.ts';
 
 const SOURCES_PATH = fileURLToPath(new URL('../data/sources.json', import.meta.url));
@@ -18,6 +20,11 @@ const POLL_TIMEOUT_MS = 15 * 60_000;
 const REQUEST_TIMEOUT_MS = 120_000;
 
 const API_URL = (process.env.API_URL ?? 'http://localhost:3001').replace(/\/+$/, '');
+const urlProblem = apiUrlProblem(API_URL);
+if (urlProblem) {
+  console.error(urlProblem);
+  process.exit(2);
+}
 const email = process.env.ADMIN_EMAIL;
 const password = process.env.ADMIN_PASSWORD;
 if (!email || !password) {
