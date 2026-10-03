@@ -3,6 +3,22 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { UploadForm } from './upload-form';
 
+/**
+ * jsdom's FormData ignores files that user-event attached to an <input type=file>. This emulates what
+ * a browser does: every named control becomes an entry, file inputs contribute their `files`.
+ */
+class BrowserLikeFormData extends FormData {
+  constructor(form?: HTMLFormElement) {
+    super();
+    for (const el of Array.from(form?.elements ?? [])) {
+      if (!(el instanceof HTMLInputElement) || !el.name) continue;
+      if (el.type === 'file')
+        for (const file of Array.from(el.files ?? [])) this.append(el.name, file);
+      else this.append(el.name, el.value);
+    }
+  }
+}
+
 const future = () => new Date(Date.now() + 3600_000).toISOString();
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -31,6 +47,7 @@ describe('UploadForm', () => {
       json(201, { id: 'd1', deduplicated: false }),
     );
     vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('FormData', BrowserLikeFormData);
     const onUploaded = vi.fn();
     render(<UploadForm onUploaded={onUploaded} />);
 
@@ -45,8 +62,10 @@ describe('UploadForm', () => {
     expect(headers.get('authorization')).toBe('Bearer adm');
     expect(headers.get('content-type')).toBeNull();
     const body = init?.body as FormData;
-    // jsdom's FormData does not carry user-event's file through, so only the field's presence is checked.
-    expect(body.has('file')).toBe(true);
+    const file = body.get('file');
+    expect(file).toBeInstanceOf(File);
+    expect((file as File).name).toBe('policy.pdf');
+    expect((file as File).type).toBe('application/pdf');
     expect(body.get('slug')).toBe('star-comprehensive');
     expect(body.get('policy_type')).toBe('health');
     expect(screen.getByLabelText(/slug/i)).toHaveValue('');

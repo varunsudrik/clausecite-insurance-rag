@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { DocumentsTable } from '@/components/documents-table';
 import { UploadForm } from '@/components/upload-form';
 import { apiFetch } from '@/lib/api';
@@ -14,13 +14,18 @@ export default function DocumentsPage() {
   const isAdmin = useSessionRole() === 'admin';
   const [documents, setDocuments] = useState<PublicDocument[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reingesting, setReingesting] = useState<ReadonlySet<string>>(() => new Set());
+  const pendingLoads = useRef(0);
 
   const reload = useCallback(async () => {
+    pendingLoads.current++;
     try {
       setDocuments(await apiFetch<PublicDocument[]>('/documents'));
       setError(null);
     } catch (e) {
       setError(describeError(e));
+    } finally {
+      pendingLoads.current--;
     }
   }, []);
 
@@ -28,18 +33,32 @@ export default function DocumentsPage() {
     ensureSession().then(reload, (e) => setError(describeError(e)));
   }, [reload]);
 
-  // Poll only while something is still being ingested; the interval is cleared on unmount.
+  // Poll only while something is still being ingested; the interval is cleared on unmount, and a tick
+  // is skipped while the previous list request is still in flight so slow responses never pile up.
   const ingesting = documents?.some((d) => d.status === 'queued' || d.status === 'processing');
   useEffect(() => {
     if (!ingesting) return;
-    const timer = setInterval(() => void reload(), POLL_MS);
+    const timer = setInterval(() => {
+      if (pendingLoads.current === 0) void reload();
+    }, POLL_MS);
     return () => clearInterval(timer);
   }, [ingesting, reload]);
 
-  const reingest = (id: string) =>
-    apiFetch(`/documents/${id}/reingest`, { method: 'POST' }).then(reload, (e) =>
-      setError(describeError(e)),
-    );
+  async function reingest(id: string) {
+    setReingesting((prev) => new Set(prev).add(id));
+    try {
+      await apiFetch(`/documents/${encodeURIComponent(id)}/reingest`, { method: 'POST' });
+      await reload();
+    } catch (e) {
+      setError(describeError(e));
+    } finally {
+      setReingesting((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -60,7 +79,12 @@ export default function DocumentsPage() {
       {documents === null ? (
         !error && <p className="text-sm text-zinc-500">Loading…</p>
       ) : (
-        <DocumentsTable documents={documents} isAdmin={isAdmin} onReingest={reingest} />
+        <DocumentsTable
+          documents={documents}
+          isAdmin={isAdmin}
+          onReingest={(id) => void reingest(id)}
+          reingestingIds={reingesting}
+        />
       )}
       {isAdmin && <UploadForm onUploaded={reload} />}
     </div>

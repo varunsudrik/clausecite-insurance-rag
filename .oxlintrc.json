@@ -1,5 +1,25 @@
 {
   "rules": { "typescript/no-explicit-any": "off" },
   "env": { "node": true },
-  "ignorePatterns": ["**/dist/**", "**/.next/**", "**/next-env.d.ts", "**/drizzle/**"]
+  "ignorePatterns": ["**/dist/**", "**/.next/**", "**/next-env.d.ts", "**/drizzle/**"],
+  "overrides": [
+    {
+      "files": ["apps/web/**"],
+      "rules": {
+        "typescript/consistent-type-imports": "error",
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@clausecite/core",
+                "allowTypeImports": true,
+                "message": "The web bundle must never import a value from core (it pulls in pg, pdfjs and amqplib); use `import type`."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
 }

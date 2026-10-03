@@ -43,7 +43,25 @@ describe('DocumentsTable', () => {
   it('shows re-ingest for admins and calls back with the id', async () => {
     const onReingest = vi.fn();
     render(<DocumentsTable documents={[doc({})]} isAdmin onReingest={onReingest} />);
-    await userEvent.click(screen.getByRole('button', { name: /re-ingest/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Re-ingest Star Comprehensive' }));
     expect(onReingest).toHaveBeenCalledWith('d1');
+  });
+
+  it('labels the actions column for screen readers', () => {
+    render(<DocumentsTable documents={[doc({})]} isAdmin onReingest={vi.fn()} />);
+    expect(screen.getByRole('columnheader', { name: 'Actions' })).toBeInTheDocument();
+  });
+
+  it('disables re-ingest for documents with a request in flight', () => {
+    render(
+      <DocumentsTable
+        documents={[doc({}), doc({ id: 'd2', title: 'Other' })]}
+        isAdmin
+        onReingest={vi.fn()}
+        reingestingIds={new Set(['d1'])}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Re-ingest Star Comprehensive' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Re-ingest Other' })).toBeEnabled();
   });
 });
