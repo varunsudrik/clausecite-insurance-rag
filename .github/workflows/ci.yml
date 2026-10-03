@@ -1,0 +1,43 @@
+# Build, lint, typecheck, format-check, unit tests and Testcontainers integration tests.
+# No secrets are needed: every test uses mock models. Docker is preinstalled on ubuntu-latest,
+# which is all the integration tests (Postgres/pgvector, RabbitMQ, Redis via Testcontainers) require.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: Build, lint and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TURBO_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v7
+
+      # Installs the pnpm version pinned by the root `packageManager` field (do not pass `version`).
+      # It must run before setup-node, whose `cache: pnpm` needs pnpm on PATH.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm format:check
+      - run: pnpm test
+      - run: pnpm test:int

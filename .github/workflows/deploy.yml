@@ -1,0 +1,224 @@
+# Builds the three images, pushes them to GHCR and rolls the production server forward over SSH.
+#
+# A no-op until the repository variable DEPLOY_ENABLED is 'true'. Setup is in docs/deploy.md.
+#   secrets:   DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS (recommended)
+#   variables: DEPLOY_ENABLED, DOMAIN, DEPLOY_PATH (optional, default /opt/clausecite)
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  deploy:
+    name: Build images and deploy
+    if: vars.DEPLOY_ENABLED == 'true' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # One deploy at a time; a running deploy is never cancelled half way through.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      # Under workflow_run, github.sha is the default branch's latest commit, not necessarily the one CI
+      # tested; head_sha is. workflow_dispatch deploys the commit of the ref it was started on.
+      DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      # `branches: [main]` matches the triggering run's branch *name*, so a pull request from a fork's own
+      # `main` branch would pass it. Only a push to this repository may deploy.
+      - name: Refuse runs that are not a push to this repository
+        if: github.event_name == 'workflow_run'
+        env:
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+        run: |
+          if [ "$RUN_EVENT" != "push" ] || [ "$RUN_REPOSITORY" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error::The CI run was a '$RUN_EVENT' from '$RUN_REPOSITORY'; only a push to $GITHUB_REPOSITORY deploys."
+            exit 1
+          fi
+
+      - name: Resolve image owner and tag
+        id: meta
+        run: |
+          set -euo pipefail
+          if ! [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::DEPLOY_SHA is not a full commit sha."
+            exit 1
+          fi
+          # GHCR image names must be lowercase; the repository owner may not be.
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+          echo "sha=$DEPLOY_SHA" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.meta.outputs.sha }}
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The org.opencontainers.image.source label links each GHCR package to this repository, so the
+      # workflow's GITHUB_TOKEN keeps write access to it on later runs.
+      # `context: .` is explicit: build-push-action's default is a git context at github.sha,
+      # which is not the commit checked out above under workflow_run.
+      - name: Build and push clausecite-api
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/node-app.Dockerfile
+          build-args: APP=api
+          push: true
+          tags: |
+            ghcr.io/${{ steps.meta.outputs.owner }}/clausecite-api:${{ steps.meta.outputs.sha }}
+            ghcr.io/${{ steps.meta.outputs.owner }}/clausecite-api:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+
+      - name: Build and push clausecite-worker
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/node-app.Dockerfile
+          build-args: APP=worker
+          push: true
+          tags: |
+            ghcr.io/${{ steps.meta.outputs.owner }}/clausecite-worker:${{ steps.meta.outputs.sha }}
+            ghcr.io/${{ steps.meta.outputs.owner }}/clausecite-worker:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=worker
+          cache-to: type=gha,scope=worker,mode=max
+
+      # NEXT_PUBLIC_API_URL keeps its Dockerfile default (/api), the Caddy route to the API.
+      - name: Build and push clausecite-web
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/web.Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ steps.meta.outputs.owner }}/clausecite-web:${{ steps.meta.outputs.sha }}
+            ghcr.io/${{ steps.meta.outputs.owner }}/clausecite-web:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
+
+      # Secrets reach these steps only through `env:`, never inline in a script body.
+      - name: Prepare SSH key and known_hosts
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          : "${DEPLOY_HOST:?set the DEPLOY_HOST secret}"
+          : "${DEPLOY_SSH_KEY:?set the DEPLOY_SSH_KEY secret}"
+          ssh_dir="$RUNNER_TEMP/ssh"
+          rm -rf "$ssh_dir"
+          (umask 077 && mkdir -p "$ssh_dir")
+
+          (umask 077 && printf '%s\n' "$DEPLOY_SSH_KEY" > "$ssh_dir/id")
+          chmod 600 "$ssh_dir/id"
+          ssh-keygen -y -f "$ssh_dir/id" > /dev/null || {
+            echo "::error::DEPLOY_SSH_KEY is not a valid, passphrase-less private key."
+            exit 1
+          }
+
+          if [ -n "$DEPLOY_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$ssh_dir/known_hosts"
+          else
+            echo "::warning::DEPLOY_KNOWN_HOSTS is not set, so the server's host key comes from ssh-keyscan. That is trust-on-first-use: it cannot detect a man-in-the-middle on this run. Store the output of 'ssh-keyscan <host>' taken from a trusted network in the DEPLOY_KNOWN_HOSTS secret."
+            ssh-keyscan -T 15 -t ed25519,ecdsa,rsa "$DEPLOY_HOST" > "$ssh_dir/known_hosts"
+          fi
+          if [ ! -s "$ssh_dir/known_hosts" ]; then
+            echo "::error::No host key for the server (ssh-keyscan returned nothing or DEPLOY_KNOWN_HOSTS is empty)."
+            exit 1
+          fi
+
+      - name: Copy compose files and roll out
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/clausecite' }}
+          IMAGE_TAG: ${{ steps.meta.outputs.sha }}
+        run: |
+          set -euo pipefail
+          : "${DEPLOY_HOST:?set the DEPLOY_HOST secret}"
+          : "${DEPLOY_USER:?set the DEPLOY_USER secret}"
+          if ! [[ "$DEPLOY_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+            echo "::error::DEPLOY_PATH must be an absolute path made of letters, digits and . _ / - only."
+            exit 1
+          fi
+          ssh_dir="$RUNNER_TEMP/ssh"
+          ssh_opts=(
+            -i "$ssh_dir/id"
+            -o IdentitiesOnly=yes
+            -o BatchMode=yes
+            -o UserKnownHostsFile="$ssh_dir/known_hosts"
+            -o GlobalKnownHostsFile=/dev/null
+            -o StrictHostKeyChecking=yes
+            -o ConnectTimeout=20
+            -o ServerAliveInterval=30
+          )
+          target="$DEPLOY_USER@$DEPLOY_HOST"
+          q_path=$(printf '%q' "$DEPLOY_PATH")
+          q_tag=$(printf '%q' "$IMAGE_TAG")
+
+          # SC2029: q_path and q_tag are deliberately expanded here, on the runner, into the remote command.
+          # shellcheck disable=SC2029
+          ssh "${ssh_opts[@]}" "$target" "mkdir -p $q_path/docker"
+          scp "${ssh_opts[@]}" docker-compose.prod.yml "$target:$DEPLOY_PATH/docker-compose.prod.yml"
+          scp "${ssh_opts[@]}" docker/Caddyfile "$target:$DEPLOY_PATH/docker/Caddyfile"
+
+          # IMAGE_TAG exported here overrides the IMAGE_TAG in .env.prod (the shell wins over --env-file).
+          # A non-zero exit from pull or up --wait (an unhealthy service) fails this step and the job.
+          # shellcheck disable=SC2029
+          ssh "${ssh_opts[@]}" "$target" \
+            "cd $q_path && export IMAGE_TAG=$q_tag \
+              && docker compose -f docker-compose.prod.yml --env-file .env.prod pull \
+              && docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --remove-orphans --wait --wait-timeout 600 \
+              && docker compose -f docker-compose.prod.yml --env-file .env.prod ps"
+
+      - name: Remove SSH key material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/ssh"
+
+      - name: Smoke test /api/health
+        env:
+          DOMAIN: ${{ vars.DOMAIN }}
+        run: |
+          set -uo pipefail
+          if ! [[ "${DOMAIN:-}" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]; then
+            echo "::error::Set the DOMAIN repository variable to the public hostname (no scheme, no path)."
+            exit 1
+          fi
+          url="https://${DOMAIN}/api/health"
+          deadline=$((SECONDS + 180))
+          while true; do
+            # No -f and no -L: the check passes on HTTP 200 exactly, not on any 2xx or a followed redirect.
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$url" || true)
+            echo "GET $url -> HTTP ${code:-000}"
+            if [ "$code" = "200" ]; then
+              exit 0
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::$url did not return HTTP 200 within 3 minutes (last status ${code:-000})."
+              exit 1
+            fi
+            sleep 10
+          done
