@@ -26,11 +26,17 @@ chown deploy:deploy /home/deploy/.ssh/authorized_keys && chmod 600 /home/deploy/
 
 ## 2. Point DNS at it
 
-Create an `A` record for `<domain>` pointing at `<server-ip>` (and an `AAAA` record if the server has IPv6). Check it before the first deploy, because Caddy requests its Let's Encrypt certificate as soon as it starts:
+Create one `A` record for `<domain>` pointing at `<server-ip>`. **Do not add an `AAAA` record**, even if the server has an IPv6 address: Docker's default compose network is IPv4-only, so an IPv6 connection to a published port is proxied and Caddy sees the bridge gateway as the client. Every IPv6 visitor would then share one address in the per-IP rate limits (the guest-token limit alone is 5 per hour), and they would lock each other out. The stack is IPv4-only until [IPv6 (not yet supported)](#ipv6-not-yet-supported) is done.
+
+Do not put a proxying CDN in front of Caddy either (for example Cloudflare with the orange cloud on, or any "proxied" record). Every client would then arrive from the CDN's edge addresses, so the per-IP limits would bucket visitors by edge, and `TRUST_PROXY_HOPS=1` (one proxy hop, Caddy) would be wrong. Use a DNS-only record.
+
+Check it before the first deploy, because Caddy requests its Let's Encrypt certificate as soon as it starts:
 
 ```bash
 # must print <server-ip>
 dig +short <domain>
+# must print nothing: there is no AAAA record
+dig +short AAAA <domain>
 ```
 
 ## 3. Lock the server down
@@ -157,7 +163,7 @@ gh workflow run deploy.yml --ref main
 gh run watch
 ```
 
-A manual run only deploys when it is started on `main`; on any other ref the job is skipped. That is accident protection, not a security boundary: anyone with write access can still change the workflow on a branch. A hard boundary needs a GitHub Environment with a deployment-branch policy and environment-scoped secrets (optional hardening).
+A manual run only deploys when it is started on `main`; on any other ref the job is skipped. That is accident protection, not a security boundary: anyone with write access can still change the workflow on a branch. A hard boundary needs a GitHub Environment with a deployment-branch policy and environment-scoped secrets (optional hardening). A manual run also deploys `main`'s current HEAD without checking that CI passed on it, so prefer letting the `workflow_run` path (CI succeeded on `main`) do the deploy.
 
 - The remote step pulls only the `api`, `worker` and `web` images (so floating infrastructure tags such as Postgres are never swapped under you), runs `up -d --remove-orphans` to create or update everything, then waits up to 10 minutes for `api worker web caddy`. Only `api` and `web` have health checks; `worker` and `caddy` have none, so for them the wait only proves the container is running.
 - A deploy never waits on `backup`, and nothing in it checks the backup either, so a stale or failing backup does not block a hotfix and does not alert you. Look at it yourself (step 11).
@@ -212,6 +218,19 @@ API_URL=https://<domain>/api pnpm sources:ingest
   docker compose -f docker-compose.prod.yml --env-file .env.prod exec api printenv TRUST_PROXY_HOPS
   ```
 
+- [ ] DNS has an `A` record and no `AAAA` record, and no proxying CDN sits in front of Caddy (step 2). The API must see each visitor's own address, not a Docker one. Nothing logs the client address (Caddy's access log is off and the API logs no requests), but the per-IP rate-limit counters in Redis are keyed by it, so use one:
+
+  ```bash
+  # from your laptop: forces IPv4, and spends one of your address's 5 guest tokens for this hour
+  curl -4 -fsS -X POST -o /dev/null https://<domain>/api/auth/guest
+  ```
+
+  ```bash
+  # on the server: must list rl:guestToken:ip:<your-public-ipv4>:<window-number>, never a 172.x or 10.x Docker address
+  docker compose -f docker-compose.prod.yml --env-file .env.prod exec redis redis-cli --scan --pattern 'rl:guestToken:ip:*'
+  ```
+
+- [ ] The guest-token limit is tight for a shared demo. Each IP address gets 5 guest tokens per hour, so a roomful of visitors behind one office or event NAT shares them, and the sixth new visitor in that hour gets a 429. The value is a code constant, not an environment variable: `RATE_POLICIES.guestToken` in `apps/api/src/limits/policies.ts` (`{ ip: { limit: 5, windowSeconds: 3600 } }`). To raise it, change it there and deploy. Visitors who already hold a token (valid for 24 hours, kept in their browser) are not affected, so have people open the app once before the demo starts.
 - [ ] The admin password is strong and not reused from anywhere else.
 - [ ] Firewall as in step 3, and `docker compose ... ps` shows only Caddy with published ports.
 - [ ] A dump exists off-host (step 11) and you have tried a restore at least once (step 12).
@@ -299,6 +318,8 @@ echo "$IMAGE_TAG"
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --force-recreate --no-deps --wait --wait-timeout 600 api worker
 ```
 
+**Change `EMBEDDING_MODEL`.** Chunks and queries must be embedded by the same model: after a change, searches compare new query vectors with old chunk vectors until every policy is re-embedded, and answers quietly get worse or refuse. Set it in `.env.prod`, recreate api and worker as in "Change `.env.prod`", then sign in as admin and press Re-ingest on every policy on the Policies page. The production images do not ship `scripts/`, so `pnpm reembed` is not a production path.
+
 **Rotate `JWT_SECRET`.** Generate a new one with `openssl rand -hex 32`, put it in `.env.prod`, and recreate api and worker as in "Change `.env.prod`". There is no overlap period: every existing token stops verifying at once, which logs everyone out. The admin has to log in again, and guests are issued a fresh token on their next request.
 
 **PgBouncer.** None is part of this stack, and a PgBouncer in transaction mode would break it: the API and worker connect with the `options` startup parameter (`-c hnsw.iterative_scan=relaxed_order`, set in `packages/core/src/db/client.ts`), which PgBouncer in transaction mode rejects. If you add a pooler, use session pooling, or set the parameter on the role instead and drop it from the client:
@@ -316,3 +337,9 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod exec postgres \
 - The push fails with `permission_denied: write_package`: on the package's settings page, under Manage Actions access, add this repository with the Write role.
 - The smoke test times out: check that DNS points at the server and that 80 and 443 are open, then read Caddy's log with `docker compose -f docker-compose.prod.yml --env-file .env.prod logs caddy`.
 - `up --wait` reports an unhealthy service: `docker compose ... ps` and `docker compose ... logs <service>` on the server show which and why.
+
+## IPv6 (not yet supported)
+
+Production is IPv4-only. Docker's default compose network has no IPv6, so a connection that reaches a published port over IPv6 is relayed by Docker's userland proxy and arrives at Caddy from the bridge gateway instead of the visitor's address. `X-Forwarded-For`, and with it `req.ip` and every per-IP limit, would then hold the gateway for all IPv6 visitors. That is why step 2 allows an `A` record only.
+
+Supporting IPv6 needs more than a DNS record: the compose network needs `enable_ipv6: true` (with an IPv6 subnet), and Docker Engine 27 or later needs `ip6tables` enabled, so that published ports are DNAT-ed and keep the client address. The API already buckets IPv6 clients by /64, so the limits are ready for it. None of this has been verified on this stack. Before adding an `AAAA` record, make an IPv6 request to the server (`curl -6 --resolve '<domain>:443:[<server-ipv6>]' -X POST -o /dev/null https://<domain>/api/auth/guest`) and run the Redis check from step 10: the key must contain your own /64, for example `rl:guestToken:ip:2001:db8:abcd:12::/64:<window-number>`, never a Docker address.
