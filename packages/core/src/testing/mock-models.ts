@@ -14,10 +14,13 @@ export function hashEmbedding(text: string, dims = EMBEDDING_DIMENSIONS): number
   return v.map((x) => x / norm);
 }
 
-export function mockEmbeddingModel(fn: (text: string) => number[] = (t) => hashEmbedding(t)) {
+export function mockEmbeddingModel(
+  fn: (text: string) => number[] = (t) => hashEmbedding(t),
+  opts: { maxEmbeddingsPerCall?: number } = {},
+) {
   return new MockEmbeddingModelV4({
     modelId: 'mock-embedding',
-    maxEmbeddingsPerCall: 100,
+    maxEmbeddingsPerCall: opts.maxEmbeddingsPerCall ?? 100,
     doEmbed: async ({ values }) => ({
       embeddings: values.map((v) => fn(String(v))),
       usage: { tokens: values.length },
@@ -32,9 +35,12 @@ const usage = {
 };
 const finishReason = { unified: 'stop' as const, raw: 'stop' };
 
+const EXHAUSTED = 'mockChatModel: no scripted stream/generate response left';
+
 /**
  * Each streamText call consumes the next `stream` entry; each generateText call the next `generate` entry.
- * An Error entry makes that call throw (to exercise error paths).
+ * An Error entry makes that call throw (to exercise error paths). Once a queue is exhausted, further
+ * calls throw too, so an unexpected extra LLM call fails the test instead of silently yielding ''.
  */
 export function mockChatModel(opts: {
   stream?: (string[] | Error)[];
@@ -45,7 +51,8 @@ export function mockChatModel(opts: {
   return new MockLanguageModelV4({
     modelId: 'mock-chat',
     doStream: async () => {
-      const deltas = streams.shift() ?? [''];
+      const deltas = streams.shift();
+      if (deltas === undefined) throw new Error(EXHAUSTED);
       if (deltas instanceof Error) throw deltas;
       return {
         stream: simulateReadableStream({
@@ -60,7 +67,8 @@ export function mockChatModel(opts: {
       };
     },
     doGenerate: async () => {
-      const text = gens.shift() ?? '';
+      const text = gens.shift();
+      if (text === undefined) throw new Error(EXHAUSTED);
       if (text instanceof Error) throw text;
       return { content: [{ type: 'text' as const, text }], finishReason, usage, warnings: [] };
     },

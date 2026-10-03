@@ -6,6 +6,9 @@ export async function embedTexts(
   opts: { batchSize?: number; maxRetries?: number } = {},
 ): Promise<{ embeddings: number[][]; tokens: number }> {
   const batchSize = opts.batchSize ?? 100;
+  if (!Number.isInteger(batchSize) || batchSize < 1) {
+    throw new RangeError(`embedTexts: batchSize must be an integer >= 1, got ${batchSize}`);
+  }
   const embeddings: number[][] = [];
   let tokens = 0;
   for (let i = 0; i < values.length; i += batchSize) {

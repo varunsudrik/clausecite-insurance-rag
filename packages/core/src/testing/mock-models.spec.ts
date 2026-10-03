@@ -21,4 +21,26 @@ describe('test doubles', () => {
     const g = await generateText({ model, prompt: 'y' });
     expect(g.text).toBe('rewritten');
   });
+
+  it('mockChatModel makes the call throw for Error entries', async () => {
+    const model = mockChatModel({
+      generate: [new Error('boom-generate')],
+      stream: [new Error('boom-stream')],
+    });
+    await expect(generateText({ model, prompt: 'x', maxRetries: 0 })).rejects.toThrow(
+      'boom-generate',
+    );
+    const s = streamText({ model, prompt: 'x', maxRetries: 0, onError: () => {} });
+    await expect(s.text).rejects.toThrow();
+  });
+
+  it('mockChatModel throws when the script is exhausted instead of returning empty text', async () => {
+    const model = mockChatModel({ generate: ['only one'] });
+    expect((await generateText({ model, prompt: 'a' })).text).toBe('only one');
+    await expect(generateText({ model, prompt: 'b', maxRetries: 0 })).rejects.toThrow(
+      /no scripted stream\/generate response left/,
+    );
+    const s = streamText({ model, prompt: 'c', maxRetries: 0, onError: () => {} });
+    await expect(s.text).rejects.toThrow();
+  });
 });

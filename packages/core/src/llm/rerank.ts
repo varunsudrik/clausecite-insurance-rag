@@ -13,6 +13,8 @@ export class RerankError extends Error {
   override name = 'RerankError';
 }
 
+const MAX_ERROR_BODY_CHARS = 500;
+
 const responseSchema = z.object({
   results: z.array(z.object({ index: z.number().int(), relevance_score: z.number() })),
 });
@@ -25,7 +27,7 @@ export function createOpenRouterReranker(opts: {
   fetch?: typeof fetch;
 }): Reranker {
   const doFetch = opts.fetch ?? fetch;
-  const base = opts.baseURL ?? 'https://openrouter.ai/api/v1';
+  const base = (opts.baseURL ?? 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
   return {
     async rerank(query, documents, topN) {
       if (documents.length === 0) return [];
@@ -42,13 +44,27 @@ export function createOpenRouterReranker(opts: {
           cause: err,
         });
       }
-      if (!res.ok) throw new RerankError(`rerank HTTP ${res.status}: ${await res.text()}`);
+      if (!res.ok) {
+        // The body read can itself fail (timeout/abort/network) - never leak a raw error.
+        const body = await res.text().catch(() => '');
+        throw new RerankError(`rerank HTTP ${res.status}: ${body.slice(0, MAX_ERROR_BODY_CHARS)}`);
+      }
       const parsed = responseSchema.safeParse(await res.json().catch(() => null));
       if (!parsed.success)
         throw new RerankError(`unexpected rerank response: ${parsed.error.message}`);
+      const seen = new Set<number>();
+      for (const { index } of parsed.data.results) {
+        if (index < 0 || index >= documents.length || seen.has(index)) {
+          throw new RerankError(
+            `rerank returned an invalid or duplicate index ${index} for ${documents.length} documents`,
+          );
+        }
+        seen.add(index);
+      }
       return parsed.data.results
         .map((r) => ({ index: r.index, score: r.relevance_score }))
-        .sort((a, b) => b.score - a.score);
+        .sort((a, b) => b.score - a.score)
+        .slice(0, topN);
     },
   };
 }
