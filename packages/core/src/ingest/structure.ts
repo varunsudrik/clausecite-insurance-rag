@@ -27,11 +27,17 @@ export interface Clause {
 }
 
 // Case-sensitive on purpose: `Part of the claim…` must not become a heading.
-const SECTION_RE = /^(?:Section|SECTION|Part|PART)\s+([A-Z]|[IVX]{1,4}|\d{1,2})\b\s*[:.\-–—]?\s*(.*)$/;
+const SECTION_RE = /^(?:Section|SECTION|Part|PART)\s+([A-Z]|[IVX]{1,4}|\d{1,2}(?:\.\d+)*)\b\s*[:.\-–—]?\s*(.*)$/;
 const LETTER_CLAUSE_RE = /^([A-Z])\.(\d+(?:\.\d+)*)\.?\s+(\S.*)$/;
 const NUMERIC_CLAUSE_RE = /^(\d+(?:\.\d+)+)\.?\s+(\S.*)$/;
 const SINGLE_NUMBER_RE = /^(\d{1,2})\.\s+(\S.*)$/;
 const TITLE_MAX = 100;
+// `(i) cataract`, `(a)`, `(A)`, `(1)`: list markers are body text whatever the font (refinement #3).
+const LIST_MARKER_RE = /^\((?:[ivxlcdm]{1,6}|[IVXLCDM]{1,6}|[a-zA-Z]|\d{1,3})\)(?=\s|$)/;
+// A real clause title starts with a capital, optionally after an opening quote/bracket.
+const CAPITALISED_RE = /^(?:["'\u201c\u2018([{]\s*)?\p{Lu}/u;
+const MAX_ID_PART = 99;
+const SECTION_LINE_MAX = 60;
 
 function isStrong(line: Line, body: number): boolean {
   const t = line.text.trim();
@@ -48,16 +54,38 @@ function numbered(line: Line, body: number, clauseId: string, afterId: string): 
   return { level: clauseId.split('.').length, clauseId, title: `${clauseId} ${short}`, rest: afterId };
 }
 
+// Wrapped body lines such as `1.5 times the sum insured` or `30.06.2024 is the cut-off date`
+// look like numbered clauses; only plausible ids followed by a capitalised title (or a strong font) count.
+function plausibleClause(line: Line, body: number, numericParts: string[], afterId: string): boolean {
+  if (numericParts.some((p) => Number(p) > MAX_ID_PART)) return false;
+  return isStrong(line, body) || CAPITALISED_RE.test(afterId);
+}
+
+// A `Section X` / `Part X` line is a heading when it is visually strong, or short, not sentence-like
+// and followed by nothing or a capitalised title. Body sentences such as `Section 45 of the Act applies.` fail.
+function isSectionHeading(line: Line, body: number, text: string, afterId: string): boolean {
+  if (isStrong(line, body)) return true;
+  if (text.length > SECTION_LINE_MAX || /[.;,]$/.test(text)) return false;
+  return afterId === '' || CAPITALISED_RE.test(afterId);
+}
+
 export function detectHeading(line: Line, bodyFontSize: number): Heading | null {
   const text = line.text.trim();
+  if (LIST_MARKER_RE.test(text)) return null;
   let m = SECTION_RE.exec(text);
-  if (m && (isStrong(line, bodyFontSize) || text.length <= 60)) {
+  if (m && isSectionHeading(line, bodyFontSize, text, m[2])) {
     return { level: 1, clauseId: m[1].toUpperCase(), title: text, rest: '' };
   }
   m = LETTER_CLAUSE_RE.exec(text);
-  if (m) return numbered(line, bodyFontSize, `${m[1]}.${m[2]}`, m[3]);
+  if (m) {
+    if (!plausibleClause(line, bodyFontSize, m[2].split('.'), m[3])) return null;
+    return numbered(line, bodyFontSize, `${m[1]}.${m[2]}`, m[3]);
+  }
   m = NUMERIC_CLAUSE_RE.exec(text);
-  if (m) return numbered(line, bodyFontSize, m[1], m[2]);
+  if (m) {
+    if (!plausibleClause(line, bodyFontSize, m[1].split('.'), m[2])) return null;
+    return numbered(line, bodyFontSize, m[1], m[2]);
+  }
   m = SINGLE_NUMBER_RE.exec(text);
   if (m && isStrong(line, bodyFontSize) && /^[A-Z]/.test(m[2])) {
     return { level: 1, clauseId: m[1], title: text, rest: '' };
@@ -105,6 +133,8 @@ export function buildSectionTree(pages: PageLines[]): SectionNode {
         stack.push(node);
       } else {
         const cur = stack[stack.length - 1];
+        // The root only gets a meaningful page range from the preamble text it actually collects.
+        if (cur === root && !cur.text.trim() && line.text.trim()) cur.pageStart = page;
         cur.text = cur.text ? `${cur.text}\n${line.text}` : line.text;
         cur.pageEnd = page;
       }
