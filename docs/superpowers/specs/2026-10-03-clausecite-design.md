@@ -2,7 +2,7 @@
 
 - **Date:** 2026-10-03
 - **Owner:** Varun Sudrik
-- **Status:** Approved in brainstorming; pending written-spec review
+- **Status:** Phase 1 implemented; Phase 2 pending
 - **Implementation refinements:** see `DECISIONS.md` at the repo root (retry topology, SQL shape, list markers, queue client, file paths).
 - **Working name:** ClauseCite (renameable)
 - **Planning:** Phase 1 (§2–§5, §7–§11, days 1–7) and Phase 2 (§6, days 8–14) each get
@@ -398,11 +398,15 @@ Sources are formatted as:
 | `POST /search` | guest+ | `{ query, documentIds?, strategy?, k? }` → ranked chunks with scores |
 | `GET /documents/:id/clauses/:clauseId` | guest+ | Full clause text (all of its chunks) |
 | `GET /definitions?term=&documentId=` | guest+ | Matching chunk(s) from the Definitions section |
-| `POST /chat` | guest+ | `{ conversationId?, messages, documentIds?, mode }` → SSE |
+| `POST /chat` | guest+ | `{ conversationId?, message, documentIds?, mode }` → SSE (one new message per request; see DECISIONS 010) |
 | `GET /conversations` / `GET /conversations/:id` | owner | History |
 | `POST /messages/:id/feedback` | owner | `{ rating: 1 \| -1, comment? }` (Phase 2) |
 | `GET /health` | none | DB, Redis, and RabbitMQ checks |
 
+- `POST /chat` follows DECISIONS 010: the request carries only the new user `message`, never
+  the transcript; the server reloads the conversation history from Postgres. Scope is per
+  request: `documentIds` applies to that request only, and omitting it searches all policies,
+  even mid-conversation (an empty list matches nothing).
 - Wherever an endpoint takes a document identifier (path `:id`, body `documentIds`, query
   `documentId`), it accepts either the UUID or the `slug`.
 - Request bodies are validated with zod schemas from `packages/core/types`.

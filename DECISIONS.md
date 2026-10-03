@@ -77,4 +77,4 @@ Scope is per request: omitting documentIds searches all policies, even mid-conve
 - **`TRUST_PROXY_HOPS`** (default `0`) drives Express `trust proxy`. `0` means `req.ip` is the socket address and `X-Forwarded-For` is ignored; production sets `1` (behind Caddy). The API test harness sets `1` because the limit e2e tests drive client IPs through `X-Forwarded-For`.
 
 **Not covered:** a chat that fails mid-generation records the tokens it knows about but not the flat `SEARCH_TOKEN_COST` (the failure path is unchanged), so the OpenRouter key's own credit limit below is the backstop for failure-heavy abuse.
-**Remaining manual step (before going public):** set a credit limit on the OpenRouter key (openrouter.ai → Keys → Edit → Credit limit). It is the only bound that does not depend on this code.
+**Remaining manual step (before going public):** set a credit limit on the OpenRouter key (openrouter.ai → Keys → Edit → Credit limit). It is the only bound that does not depend on this code. It is an operator step, not code: `docs/deploy.md` documents it as step 0 and repeats it first in the step 10 pre-demo checklist.
