@@ -13,6 +13,7 @@
     "typecheck": "turbo run typecheck",
     "lint": "oxlint .",
     "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "infra:up": "docker compose up -d --wait",
     "infra:down": "docker compose down",
     "db:generate": "pnpm --filter @clausecite/core db:generate",
