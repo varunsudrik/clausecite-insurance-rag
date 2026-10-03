@@ -27,7 +27,8 @@ export interface Clause {
 }
 
 // Case-sensitive on purpose: `Part of the claim…` must not become a heading.
-const SECTION_RE = /^(?:Section|SECTION|Part|PART)\s+([A-Z]|[IVX]{1,4}|\d{1,2}(?:\.\d+)*)\b\s*[:.\-–—]?\s*(.*)$/;
+const SECTION_RE =
+  /^(?:Section|SECTION|Part|PART)\s+([A-Z]|[IVX]{1,4}|\d{1,2}(?:\.\d+)*)\b\s*[:.\-–—]?\s*(.*)$/;
 const LETTER_CLAUSE_RE = /^([A-Z])\.(\d+(?:\.\d+)*)\.?\s+(\S.*)$/;
 const NUMERIC_CLAUSE_RE = /^(\d+(?:\.\d+)+)\.?\s+(\S.*)$/;
 const SINGLE_NUMBER_RE = /^(\d{1,2})\.\s+(\S.*)$/;
@@ -41,7 +42,12 @@ const SECTION_LINE_MAX = 60;
 
 function isStrong(line: Line, body: number): boolean {
   const t = line.text.trim();
-  const allCaps = /[A-Z]/.test(t) && t === t.toUpperCase() && t.length >= 4 && t.length <= 80 && !/[.:;,]$/.test(t);
+  const allCaps =
+    /[A-Z]/.test(t) &&
+    t === t.toUpperCase() &&
+    t.length >= 4 &&
+    t.length <= 80 &&
+    !/[.:;,]$/.test(t);
   return line.fontSize >= body * 1.15 || (line.bold && t.length <= 80) || allCaps;
 }
 
@@ -51,12 +57,22 @@ function numbered(line: Line, body: number, clauseId: string, afterId: string): 
     text.length > TITLE_MAX || (!line.bold && line.fontSize <= body && /[.;]$/.test(text));
   if (!paragraph) return { level: clauseId.split('.').length, clauseId, title: text, rest: '' };
   const short = afterId.length > 60 ? `${afterId.slice(0, 60).trimEnd()}…` : afterId;
-  return { level: clauseId.split('.').length, clauseId, title: `${clauseId} ${short}`, rest: afterId };
+  return {
+    level: clauseId.split('.').length,
+    clauseId,
+    title: `${clauseId} ${short}`,
+    rest: afterId,
+  };
 }
 
 // Wrapped body lines such as `1.5 times the sum insured` or `30.06.2024 is the cut-off date`
 // look like numbered clauses; only plausible ids followed by a capitalised title (or a strong font) count.
-function plausibleClause(line: Line, body: number, numericParts: string[], afterId: string): boolean {
+function plausibleClause(
+  line: Line,
+  body: number,
+  numericParts: string[],
+  afterId: string,
+): boolean {
   if (numericParts.some((p) => Number(p) > MAX_ID_PART)) return false;
   return isStrong(line, body) || CAPITALISED_RE.test(afterId);
 }
@@ -91,7 +107,12 @@ export function detectHeading(line: Line, bodyFontSize: number): Heading | null 
     return { level: 1, clauseId: m[1], title: text, rest: '' };
   }
   if (isStrong(line, bodyFontSize)) {
-    return { level: line.fontSize >= bodyFontSize * 1.3 ? 1 : 2, clauseId: null, title: text, rest: '' };
+    return {
+      level: line.fontSize >= bodyFontSize * 1.3 ? 1 : 2,
+      clauseId: null,
+      title: text,
+      rest: '',
+    };
   }
   return null;
 }
@@ -111,7 +132,15 @@ export function bodyFontSize(pages: PageLines[]): number {
 
 export function buildSectionTree(pages: PageLines[]): SectionNode {
   const body = bodyFontSize(pages);
-  const root: SectionNode = { title: '', clauseId: 'root', level: 0, pageStart: 1, pageEnd: 1, text: '', children: [] };
+  const root: SectionNode = {
+    title: '',
+    clauseId: 'root',
+    level: 0,
+    pageStart: 1,
+    pageEnd: 1,
+    text: '',
+    children: [],
+  };
   const unnamed = new Set<SectionNode>();
   const stack: SectionNode[] = [root];
   for (const { page, lines } of pages) {
@@ -153,11 +182,25 @@ export function buildSectionTree(pages: PageLines[]): SectionNode {
 export function flattenClauses(root: SectionNode): Clause[] {
   const out: Clause[] = [];
   if (root.text.trim()) {
-    out.push({ clauseId: 'preamble', title: 'Preamble', sectionPath: [], pageStart: root.pageStart, pageEnd: root.pageEnd, text: root.text.trim() });
+    out.push({
+      clauseId: 'preamble',
+      title: 'Preamble',
+      sectionPath: [],
+      pageStart: root.pageStart,
+      pageEnd: root.pageEnd,
+      text: root.text.trim(),
+    });
   }
   const visit = (node: SectionNode, path: string[]) => {
     if (node.text.trim()) {
-      out.push({ clauseId: node.clauseId, title: node.title, sectionPath: path, pageStart: node.pageStart, pageEnd: node.pageEnd, text: node.text.trim() });
+      out.push({
+        clauseId: node.clauseId,
+        title: node.title,
+        sectionPath: path,
+        pageStart: node.pageStart,
+        pageEnd: node.pageEnd,
+        text: node.text.trim(),
+      });
     }
     for (const child of node.children) visit(child, [...path, node.title]);
   };

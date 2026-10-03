@@ -10,7 +10,9 @@ import { startTestDb, type TestDb } from '../testing/postgres.js';
 import { IngestError } from './errors.js';
 import { ingestDocument, markIngestFailed, markIngestRetrying } from './ingest-document.js';
 
-const FIXTURE = fileURLToPath(new URL('../../../../data/fixtures/sample-policy.pdf', import.meta.url));
+const FIXTURE = fileURLToPath(
+  new URL('../../../../data/fixtures/sample-policy.pdf', import.meta.url),
+);
 let t: TestDb;
 beforeAll(async () => {
   t = await startTestDb();
@@ -42,7 +44,11 @@ async function nearlyEmptyPdf(pages = 2): Promise<Uint8Array> {
   return pdf.save();
 }
 
-const deps = () => ({ db: t.db, embeddingModel: mockEmbeddingModel(), embeddingModelId: 'mock-embedding' });
+const deps = () => ({
+  db: t.db,
+  embeddingModel: mockEmbeddingModel(),
+  embeddingModelId: 'mock-embedding',
+});
 const chunksOf = (id: string) =>
   t.db.select().from(chunks).where(eq(chunks.documentId, id)).orderBy(asc(chunks.chunkIndex));
 
@@ -55,7 +61,17 @@ describe('ingestDocument', () => {
     const rows = await chunksOf(doc.id);
     expect(rows).toHaveLength(res.chunkCount);
     expect(rows.flatMap((r) => r.clauseIds)).toEqual([
-      'A.1', 'A.2', 'B.1', 'B.2', 'B.3', 'C.1', 'C.2', 'C.2.1', 'C.3', 'D.1', 'D.2',
+      'A.1',
+      'A.2',
+      'B.1',
+      'B.2',
+      'B.3',
+      'C.1',
+      'C.2',
+      'C.2.1',
+      'C.3',
+      'D.1',
+      'D.2',
     ]);
     expect(rows.find((r) => r.clauseIds.includes('C.3'))!.pageStart).toBe(3);
     expect(rows[0].contentForEmbedding.startsWith('Sample Health Shield (Acme) › ')).toBe(true);
@@ -179,7 +195,9 @@ describe('ingestDocument', () => {
       modelId: 'short-embedding',
       maxEmbeddingsPerCall: 100,
       doEmbed: async ({ values }) => ({
-        embeddings: values.slice(1).map(() => Array.from({ length: EMBEDDING_DIMENSIONS }, () => 0.1)),
+        embeddings: values
+          .slice(1)
+          .map(() => Array.from({ length: EMBEDDING_DIMENSIONS }, () => 0.1)),
         usage: { tokens: values.length },
         warnings: [],
       }),
@@ -196,7 +214,9 @@ describe('ingestDocument', () => {
     const ok = await ingestDocument(deps(), doc.id);
     const before = (await chunksOf(doc.id)).map((r) => r.id);
     // Correct length passes validation; pgvector rejects NaN at INSERT, after the DELETE already ran.
-    const nan = mockEmbeddingModel(() => Array.from({ length: EMBEDDING_DIMENSIONS }, () => Number.NaN));
+    const nan = mockEmbeddingModel(() =>
+      Array.from({ length: EMBEDDING_DIMENSIONS }, () => Number.NaN),
+    );
     await expect(ingestDocument({ ...deps(), embeddingModel: nan }, doc.id)).rejects.toThrow();
     const after = await chunksOf(doc.id);
     expect(after).toHaveLength(ok.chunkCount);
@@ -226,7 +246,11 @@ describe('ingestDocument', () => {
     const doc = await insertDoc();
     await markIngestRetrying(t.db, doc.id, new IngestError('EMBEDDING_FAILED', 'timeout'), 1);
     let [row] = await t.db.select().from(documents).where(eq(documents.id, doc.id));
-    expect(row).toMatchObject({ status: 'queued', attempts: 1, error: 'EMBEDDING_FAILED: timeout' });
+    expect(row).toMatchObject({
+      status: 'queued',
+      attempts: 1,
+      error: 'EMBEDDING_FAILED: timeout',
+    });
     await markIngestFailed(t.db, doc.id, new Error('db gone'), 3);
     [row] = await t.db.select().from(documents).where(eq(documents.id, doc.id));
     expect(row).toMatchObject({ status: 'failed', attempts: 3, error: 'UNKNOWN: db gone' });

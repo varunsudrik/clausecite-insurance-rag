@@ -19,7 +19,11 @@ export interface ChunkOptions {
   minTokens: number;
 }
 
-export const DEFAULT_CHUNK_OPTIONS: ChunkOptions = { maxTokens: 600, overlapTokens: 80, minTokens: 120 };
+export const DEFAULT_CHUNK_OPTIONS: ChunkOptions = {
+  maxTokens: 600,
+  overlapTokens: 80,
+  minTokens: 120,
+};
 
 interface Piece {
   clauseIds: string[];
@@ -69,7 +73,8 @@ export function splitText(text: string, maxTokens: number, overlapTokens: number
   return parts;
 }
 
-const samePath = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+const samePath = (a: string[], b: string[]) =>
+  a.length === b.length && a.every((x, i) => x === b[i]);
 
 export function chunkClauses(
   clauses: Clause[],
@@ -78,7 +83,13 @@ export function chunkClauses(
 ): ChunkDraft[] {
   const pieces: Piece[] = [];
   for (const c of clauses) {
-    const base = { clauseIds: [c.clauseId], titles: [c.title], sectionPath: c.sectionPath, pageStart: c.pageStart, pageEnd: c.pageEnd };
+    const base = {
+      clauseIds: [c.clauseId],
+      titles: [c.title],
+      sectionPath: c.sectionPath,
+      pageStart: c.pageStart,
+      pageEnd: c.pageEnd,
+    };
     const whole = `${c.title}\n${c.text}`;
     const wholeTokens = countTokens(whole);
     if (wholeTokens <= opts.maxTokens) {

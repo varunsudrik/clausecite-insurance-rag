@@ -126,7 +126,12 @@ function groupIntoLines(items: Item[]): Line[] {
       let prevEnd: number | null = null;
       for (const it of rowItems) {
         const gap = prevEnd === null ? 0 : it.x - prevEnd;
-        if (prevEnd !== null && !text.endsWith(' ') && !it.text.startsWith(' ') && gap > it.fontSize * 0.15) {
+        if (
+          prevEnd !== null &&
+          !text.endsWith(' ') &&
+          !it.text.startsWith(' ') &&
+          gap > it.fontSize * 0.15
+        ) {
           text += ' ';
         }
         text += it.text;
@@ -150,12 +155,12 @@ export function removeRepeatedHeaderFooter(pages: PageLines[]): PageLines[] {
   if (pages.length < 3) return pages;
   const counts = new Map<string, number>();
   for (const p of pages) {
-    const edge = new Set([...p.lines.slice(0, 2), ...p.lines.slice(-2)].map((l) => normalize(l.text)));
+    const edge = new Set(
+      [...p.lines.slice(0, 2), ...p.lines.slice(-2)].map((l) => normalize(l.text)),
+    );
     for (const key of edge) counts.set(key, (counts.get(key) ?? 0) + 1);
   }
-  const repeated = new Set(
-    [...counts].filter(([, c]) => c > pages.length / 2).map(([key]) => key),
-  );
+  const repeated = new Set([...counts].filter(([, c]) => c > pages.length / 2).map(([key]) => key));
   return pages.map((p) => {
     const n = p.lines.length;
     return {

@@ -41,7 +41,9 @@ describe('removeRepeatedHeaderFooter', () => {
   it('drops the running header and page-number footer from every page', async () => {
     const pages = removeRepeatedHeaderFooter(await extractPageLines(load()));
     for (const p of pages) {
-      expect(p.lines.some((l) => l.text.includes('Policy Wording') && l.fontSize === 9)).toBe(false);
+      expect(p.lines.some((l) => l.text.includes('Policy Wording') && l.fontSize === 9)).toBe(
+        false,
+      );
       expect(p.lines.some((l) => /^Page \d+ of 4$/.test(l.text))).toBe(false);
     }
     expect(pages[0].lines[0].text).toBe('SAMPLE HEALTH SHIELD POLICY WORDING');

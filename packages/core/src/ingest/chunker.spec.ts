@@ -14,7 +14,8 @@ const clause = (id: string, text: string, path = ['Section C: Exclusions'], page
   pageEnd: page,
   text,
 });
-const sentence = (i: number) => `Sentence number ${i} explains a specific rule about hospital cover and limits.`;
+const sentence = (i: number) =>
+  `Sentence number ${i} explains a specific rule about hospital cover and limits.`;
 
 describe('countTokens', () => {
   it('counts cl100k tokens', () => {
@@ -48,11 +49,24 @@ describe('splitText', () => {
 
 describe('chunkClauses', () => {
   it('builds one chunk per normal clause with a contextual header', () => {
-    const big = clause('C.2', Array.from({ length: 12 }, (_, i) => sentence(i)).join(' '), ['Section C: Exclusions'], 3);
+    const big = clause(
+      'C.2',
+      Array.from({ length: 12 }, (_, i) => sentence(i)).join(' '),
+      ['Section C: Exclusions'],
+      3,
+    );
     const [c] = chunkClauses([big], meta);
-    expect(c).toMatchObject({ chunkIndex: 0, clauseId: 'C.2', clauseIds: ['C.2'], pageStart: 3, pageEnd: 3 });
+    expect(c).toMatchObject({
+      chunkIndex: 0,
+      clauseId: 'C.2',
+      clauseIds: ['C.2'],
+      pageStart: 3,
+      pageEnd: 3,
+    });
     expect(c.content.startsWith('C.2 Title\n')).toBe(true);
-    expect(c.contentForEmbedding.split('\n')[0]).toBe('Sample Health Shield (Acme) › Section C: Exclusions › C.2 Title');
+    expect(c.contentForEmbedding.split('\n')[0]).toBe(
+      'Sample Health Shield (Acme) › Section C: Exclusions › C.2 Title',
+    );
     expect(c.tokenCount).toBe(countTokens(c.contentForEmbedding));
   });
 
@@ -81,21 +95,31 @@ describe('chunkClauses', () => {
     );
     expect(out.map((c) => c.clauseIds)).toEqual([['C.1'], ['C.2', 'C.3'], ['D.1']]);
     expect(out[1]).toMatchObject({ clauseId: 'C.2', pageStart: 2, pageEnd: 3 });
-    expect(out[1].contentForEmbedding.split('\n')[0]).toBe('Sample Health Shield (Acme) › Section C: Exclusions');
+    expect(out[1].contentForEmbedding.split('\n')[0]).toBe(
+      'Sample Health Shield (Acme) › Section C: Exclusions',
+    );
     expect(out[1].content).toBe('C.2 Title\nShort rule.\n\nC.3 Title\nAnother short rule.');
   });
 
   it('chunks clauses containing special-token literals without throwing', () => {
-    const out = chunkClauses([clause('C.9', 'The literal <|endoftext|> may appear in extracted text.')], meta);
+    const out = chunkClauses(
+      [clause('C.9', 'The literal <|endoftext|> may appear in extracted text.')],
+      meta,
+    );
     expect(out).toHaveLength(1);
     expect(out[0].content).toContain('<|endoftext|>');
     expect(out[0].tokenCount).toBeGreaterThan(0);
   });
 
   it('never lets a merged group exceed maxTokens once the separator is counted', () => {
-    const rules = (n: number, tail = '') => `${Array.from({ length: n }, (_, i) => `rule ${i}`).join(' ')}${tail}`;
+    const rules = (n: number, tail = '') =>
+      `${Array.from({ length: n }, (_, i) => `rule ${i}`).join(' ')}${tail}`;
     const opts = { maxTokens: 60, overlapTokens: 10, minTokens: 40 };
-    const clauses = [clause('A.1', rules(1)), clause('A.2', rules(6, ' limit')), clause('A.3', rules(7, ' limit'))];
+    const clauses = [
+      clause('A.1', rules(1)),
+      clause('A.2', rules(6, ' limit')),
+      clause('A.3', rules(7, ' limit')),
+    ];
     const out = chunkClauses(clauses, meta, opts);
     expect(out.some((c) => c.clauseIds.length > 1)).toBe(true); // the cap is exercised on a real merge
     for (const c of out) expect(countTokens(c.content)).toBeLessThanOrEqual(opts.maxTokens);
@@ -103,8 +127,12 @@ describe('chunkClauses', () => {
   });
 
   it('covers every fixture clause exactly once', async () => {
-    const data = new Uint8Array(readFileSync(new URL('../../../../data/fixtures/sample-policy.pdf', import.meta.url)));
-    const clauses = flattenClauses(buildSectionTree(removeRepeatedHeaderFooter(await extractPageLines(data))));
+    const data = new Uint8Array(
+      readFileSync(new URL('../../../../data/fixtures/sample-policy.pdf', import.meta.url)),
+    );
+    const clauses = flattenClauses(
+      buildSectionTree(removeRepeatedHeaderFooter(await extractPageLines(data))),
+    );
     const ids = chunkClauses(clauses, meta).flatMap((c) => c.clauseIds);
     expect(ids).toEqual(clauses.map((c) => c.clauseId));
   });

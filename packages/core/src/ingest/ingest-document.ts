@@ -39,7 +39,9 @@ export async function ingestDocument(deps: IngestDeps, documentId: string): Prom
     throw new IngestError('FILE_NOT_FOUND', `cannot read ${doc.filePath}`, { cause: err });
   }
 
-  const pages = removeRepeatedHeaderFooter(await extractPageLines(data, { maxPages: deps.maxPages ?? 200 }));
+  const pages = removeRepeatedHeaderFooter(
+    await extractPageLines(data, { maxPages: deps.maxPages ?? 200 }),
+  );
   assertTextLayer(pages);
   const drafts = chunkClauses(flattenClauses(buildSectionTree(pages)), {
     product: doc.product,
@@ -54,7 +56,9 @@ export async function ingestDocument(deps: IngestDeps, documentId: string): Prom
       { maxRetries: deps.embeddingMaxRetries ?? 3 },
     );
   } catch (err) {
-    throw new IngestError('EMBEDDING_FAILED', `embedding failed: ${(err as Error).message}`, { cause: err });
+    throw new IngestError('EMBEDDING_FAILED', `embedding failed: ${(err as Error).message}`, {
+      cause: err,
+    });
   }
 
   assertValidEmbeddings(embedded.embeddings, drafts.length);
@@ -67,12 +71,13 @@ export async function ingestDocument(deps: IngestDeps, documentId: string): Prom
       .from(documents)
       .where(eq(documents.id, documentId))
       .for('update');
-    if (locked.length === 0) throw new IngestError('DOCUMENT_NOT_FOUND', `document ${documentId} not found`);
+    if (locked.length === 0)
+      throw new IngestError('DOCUMENT_NOT_FOUND', `document ${documentId} not found`);
     await tx.delete(chunks).where(eq(chunks.documentId, documentId));
     if (drafts.length > 0) {
-      await tx.insert(chunks).values(
-        drafts.map((d, i) => ({ ...d, documentId, embedding: embedded.embeddings[i] })),
-      );
+      await tx
+        .insert(chunks)
+        .values(drafts.map((d, i) => ({ ...d, documentId, embedding: embedded.embeddings[i] })));
     }
     await tx
       .update(documents)
@@ -114,7 +119,12 @@ export function describeError(err: unknown): string {
   return text.slice(0, 2000);
 }
 
-export async function markIngestRetrying(db: Db, documentId: string, err: unknown, attempts: number) {
+export async function markIngestRetrying(
+  db: Db,
+  documentId: string,
+  err: unknown,
+  attempts: number,
+) {
   await db
     .update(documents)
     .set({ status: 'queued', error: describeError(err), attempts })
