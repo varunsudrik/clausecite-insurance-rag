@@ -1,12 +1,16 @@
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { asc, eq } from 'drizzle-orm';
 import { MockEmbeddingModelV4 } from 'ai/test';
 import { PDFDocument } from 'pdf-lib';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { chunks, documents, EMBEDDING_DIMENSIONS } from '../db/schema.js';
 import { hashEmbedding, mockEmbeddingModel } from '../testing/mock-models.js';
 import { startTestDb, type TestDb } from '../testing/postgres.js';
+import { rawTextPdf } from '../testing/raw-pdf.js';
 import { IngestError } from './errors.js';
 import { ingestDocument, markIngestFailed, markIngestRetrying } from './ingest-document.js';
 
@@ -90,6 +94,41 @@ describe('ingestDocument', () => {
     const first = await ingestDocument(deps(), doc.id);
     await ingestDocument(deps(), doc.id);
     expect(await chunksOf(doc.id)).toHaveLength(first.chunkCount);
+  });
+
+  it('sanitizes NUL and other control characters out of the text layer instead of failing the insert', async () => {
+    // Postgres text cannot hold U+0000; one insurer PDF maps its "ffi" ligature glyph to it.
+    const body = (extra: string) =>
+      `${extra} Reimbursement is subject to the sum insured and the terms of this policy wording.`;
+    const pdf = rawTextPdf([
+      [
+        body('Offi\u0000ce of the Insurance Ombudsman'),
+        body('Grievance at the O\u0000ce of the Ombudsman'),
+        body('Second\u0001 line'),
+        body('Fourth line'),
+      ],
+    ]);
+    const dir = await mkdtemp(join(tmpdir(), 'clausecite-nul-'));
+    try {
+      const file = join(dir, 'nul.pdf');
+      await writeFile(file, pdf);
+      const doc = await insertDoc(file);
+      const warn = vi.fn();
+      const res = await ingestDocument({ ...deps(), logger: { warn } }, doc.id);
+      const rows = await chunksOf(doc.id);
+      expect(rows).toHaveLength(res.chunkCount);
+      expect(rows.length).toBeGreaterThan(0);
+      for (const r of rows) {
+        expect(r.content).not.toContain('\u0000');
+        expect(r.contentForEmbedding).not.toContain('\u0000');
+      }
+      expect(rows.map((r) => r.content).join('\n')).toContain('Office of the Insurance Ombudsman');
+      expect(warn).toHaveBeenCalledExactlyOnceWith(`sanitized 3 control characters in ${doc.slug}`);
+      const [after] = await t.db.select().from(documents).where(eq(documents.id, doc.id));
+      expect(after).toMatchObject({ status: 'ready', error: null });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('serializes overlapping ingests of the same document (no duplicate chunks)', async () => {
@@ -217,7 +256,11 @@ describe('ingestDocument', () => {
     const nan = mockEmbeddingModel(() =>
       Array.from({ length: EMBEDDING_DIMENSIONS }, () => Number.NaN),
     );
-    await expect(ingestDocument({ ...deps(), embeddingModel: nan }, doc.id)).rejects.toThrow();
+    // A database data exception is deterministic: retrying the same chunks cannot succeed.
+    const err = await ingestDocument({ ...deps(), embeddingModel: nan }, doc.id).catch((e) => e);
+    expect(err).toBeInstanceOf(IngestError);
+    expect(err).toMatchObject({ code: 'CHUNK_DATA_INVALID', retryable: false });
+    expect(err.message).toMatch(/SQLSTATE 22/);
     const after = await chunksOf(doc.id);
     expect(after).toHaveLength(ok.chunkCount);
     expect(after.map((r) => r.id).sort()).toEqual([...before].sort());

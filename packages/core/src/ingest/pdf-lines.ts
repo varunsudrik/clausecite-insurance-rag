@@ -3,6 +3,7 @@ import { dirname, join, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { IngestError } from './errors.js';
+import { sanitizePdfText } from './text-sanitize.js';
 
 const require = createRequire(import.meta.url);
 
@@ -46,9 +47,15 @@ interface RawTextItem {
 const isTextItem = (it: unknown): it is RawTextItem =>
   typeof it === 'object' && it !== null && 'str' in it && 'transform' in it;
 
+export interface ExtractOptions {
+  maxPages?: number;
+  /** Called once, after the last page, with the number of control characters removed (only when > 0). */
+  onSanitized?: (removedChars: number) => void;
+}
+
 export async function extractPageLines(
   data: Uint8Array,
-  opts: { maxPages?: number } = {},
+  opts: ExtractOptions = {},
 ): Promise<PageLines[]> {
   const loadingTask = getDocument({
     data: new Uint8Array(data), // pdf.js detaches the buffer it receives
@@ -70,15 +77,19 @@ export async function extractPageLines(
       throw new IngestError('TOO_MANY_PAGES', `${doc.numPages} pages exceeds ${opts.maxPages}`);
     }
     const pages: PageLines[] = [];
+    let sanitizedChars = 0;
     for (let p = 1; p <= doc.numPages; p++) {
       const page = await doc.getPage(p);
       await page.getOperatorList(); // loads fonts into commonObjs so real font names are readable
       const content = await page.getTextContent();
       const items: Item[] = [];
       for (const it of content.items) {
-        if (!isTextItem(it) || it.str.trim().length === 0) continue;
+        if (!isTextItem(it)) continue;
+        const { text, removed } = sanitizePdfText(it.str);
+        sanitizedChars += removed;
+        if (text.trim().length === 0) continue;
         items.push({
-          text: it.str,
+          text,
           x: it.transform[4],
           y: it.transform[5],
           width: it.width,
@@ -89,6 +100,7 @@ export async function extractPageLines(
       pages.push({ page: p, lines: groupIntoLines(items) });
       page.cleanup();
     }
+    if (sanitizedChars > 0) opts.onSanitized?.(sanitizedChars);
     return pages;
   } catch (err) {
     if (err instanceof IngestError) throw err;

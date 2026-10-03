@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { rawTextPdf } from '../testing/raw-pdf.js';
 import { IngestError } from './errors.js';
 import {
   assertTextLayer,
@@ -22,6 +23,21 @@ describe('extractPageLines', () => {
     expect(body).toMatchObject({ fontSize: 10, bold: false });
     // top-to-bottom order
     expect(p2.indexOf(heading!)).toBeLessThan(p2.indexOf(body!));
+  });
+
+  it('strips control characters from item text and reports how many it removed', async () => {
+    // Some insurer PDFs map the "ffi" ligature glyph to U+0000 in their ToUnicode CMap.
+    const pdf = rawTextPdf([['Offi\u0000ce of the O\u0001mbudsman', '\u0000\u0000', 'Plain line']]);
+    const onSanitized = vi.fn();
+    const pages = await extractPageLines(pdf, { onSanitized });
+    expect(pages[0].lines.map((l) => l.text)).toEqual(['Office of the Ombudsman', 'Plain line']);
+    expect(onSanitized).toHaveBeenCalledExactlyOnceWith(4);
+  });
+
+  it('does not call onSanitized for clean text', async () => {
+    const onSanitized = vi.fn();
+    await extractPageLines(load(), { onSanitized });
+    expect(onSanitized).not.toHaveBeenCalled();
   });
 
   it('rejects documents above maxPages', async () => {

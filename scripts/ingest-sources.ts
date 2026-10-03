@@ -1,8 +1,9 @@
-// Usage: pnpm sources:ingest
+// Usage: pnpm sources:ingest [--reingest-failed]
 // Uploads every PDF listed in data/sources.lock.json (see `pnpm sources:download`) through the API
 // as the admin, then polls GET /documents until each reaches ready or failed. The worker must be
 // running (it consumes the ingest jobs). Env: ADMIN_EMAIL, ADMIN_PASSWORD, API_URL (default http://localhost:3001).
-// Exit code 1 if any document failed to upload or ingest. Never prints the password or the token.
+// With --reingest-failed, documents the API already holds in the `failed` state (for example after a parser fix) are
+// queued again via POST /documents/:id/reingest. Exit code 1 if any document failed to upload or ingest. Never prints the password or the token.
 import { readFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -86,7 +87,8 @@ const auth = { Authorization: `Bearer ${token}` };
 console.log(`logged in to ${API_URL}; uploading ${lock.length} documents`);
 
 const rows: Row[] = [];
-const tracked: { id: string; slug: string }[] = []; // uploaded documents, by API id
+const reingestFailed = process.argv.includes('--reingest-failed');
+const tracked: { id: string; slug: string; status: ApiDocument['status'] }[] = []; // uploaded documents, by API id
 
 for (const entry of lock) {
   const source = sources.get(entry.slug);
@@ -130,7 +132,7 @@ for (const entry of lock) {
           : res.status === 200
             ? 'deduplicated'
             : undefined;
-      tracked.push({ id: doc.id, slug: entry.slug });
+      tracked.push({ id: doc.id, slug: entry.slug, status: doc.status });
       console.log(`${entry.slug}: ${res.status === 201 ? 'uploaded' : (note ?? 'deduplicated')}`);
     } else if (res.status === 409) {
       fail(`409 slug already taken by different bytes (${await errorMessage(res)})`);
@@ -146,6 +148,19 @@ async function listDocuments(): Promise<ApiDocument[]> {
   const res = await fetch(`${API_URL}/documents`, { headers: auth, signal: signal() });
   if (res.status !== 200) throw new Error(`GET /documents failed: HTTP ${res.status}`);
   return (await res.json()) as ApiDocument[];
+}
+
+if (reingestFailed) {
+  for (const doc of tracked.filter((d) => d.status === 'failed')) {
+    const res = await fetch(`${API_URL}/documents/${doc.id}/reingest`, {
+      method: 'POST',
+      headers: auth,
+      signal: signal(),
+    });
+    const outcome =
+      res.status === 202 ? 'queued again' : `HTTP ${res.status} ${await errorMessage(res)}`;
+    console.log(`${doc.slug}: reingest ${outcome}`);
+  }
 }
 
 const deadline = Date.now() + POLL_TIMEOUT_MS;

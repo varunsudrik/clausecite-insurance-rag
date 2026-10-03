@@ -5,7 +5,7 @@ import type { Db } from '../db/client.js';
 import { chunks, documents, EMBEDDING_DIMENSIONS } from '../db/schema.js';
 import { embedTexts } from '../llm/embed.js';
 import { chunkClauses } from './chunker.js';
-import { IngestError } from './errors.js';
+import { classifyDbError, IngestError } from './errors.js';
 import { assertTextLayer, extractPageLines, removeRepeatedHeaderFooter } from './pdf-lines.js';
 import { buildSectionTree, flattenClauses } from './structure.js';
 
@@ -16,6 +16,8 @@ export interface IngestDeps {
   readFile?: (filePath: string) => Promise<Uint8Array>;
   maxPages?: number;
   embeddingMaxRetries?: number;
+  /** Receives a warning when text had to be sanitized (never document text, only counts and the slug). */
+  logger?: { warn(message: string): void };
 }
 
 export interface IngestResult {
@@ -40,7 +42,10 @@ export async function ingestDocument(deps: IngestDeps, documentId: string): Prom
   }
 
   const pages = removeRepeatedHeaderFooter(
-    await extractPageLines(data, { maxPages: deps.maxPages ?? 200 }),
+    await extractPageLines(data, {
+      maxPages: deps.maxPages ?? 200,
+      onSanitized: (n) => deps.logger?.warn(`sanitized ${n} control characters in ${doc.slug}`),
+    }),
   );
   assertTextLayer(pages);
   const drafts = chunkClauses(flattenClauses(buildSectionTree(pages)), {
@@ -63,33 +68,38 @@ export async function ingestDocument(deps: IngestDeps, documentId: string): Prom
 
   assertValidEmbeddings(embedded.embeddings, drafts.length);
 
-  await db.transaction(async (tx) => {
-    // Serialize overlapping ingests of the same document: without the row lock, two transactions can
-    // both delete (seeing no chunks) and then both insert, leaving duplicate chunks.
-    const locked = await tx
-      .select({ id: documents.id })
-      .from(documents)
-      .where(eq(documents.id, documentId))
-      .for('update');
-    if (locked.length === 0)
-      throw new IngestError('DOCUMENT_NOT_FOUND', `document ${documentId} not found`);
-    await tx.delete(chunks).where(eq(chunks.documentId, documentId));
-    if (drafts.length > 0) {
+  try {
+    await db.transaction(async (tx) => {
+      // Serialize overlapping ingests of the same document: without the row lock, two transactions can
+      // both delete (seeing no chunks) and then both insert, leaving duplicate chunks.
+      const locked = await tx
+        .select({ id: documents.id })
+        .from(documents)
+        .where(eq(documents.id, documentId))
+        .for('update');
+      if (locked.length === 0)
+        throw new IngestError('DOCUMENT_NOT_FOUND', `document ${documentId} not found`);
+      await tx.delete(chunks).where(eq(chunks.documentId, documentId));
+      if (drafts.length > 0) {
+        await tx
+          .insert(chunks)
+          .values(drafts.map((d, i) => ({ ...d, documentId, embedding: embedded.embeddings[i] })));
+      }
       await tx
-        .insert(chunks)
-        .values(drafts.map((d, i) => ({ ...d, documentId, embedding: embedded.embeddings[i] })));
-    }
-    await tx
-      .update(documents)
-      .set({
-        status: 'ready',
-        error: null,
-        pageCount: pages.length,
-        chunkCount: drafts.length,
-        embeddingModel: deps.embeddingModelId,
-      })
-      .where(eq(documents.id, documentId));
-  });
+        .update(documents)
+        .set({
+          status: 'ready',
+          error: null,
+          pageCount: pages.length,
+          chunkCount: drafts.length,
+          embeddingModel: deps.embeddingModelId,
+        })
+        .where(eq(documents.id, documentId));
+    });
+  } catch (err) {
+    // Class-22 data exceptions would fail identically on every retry; see classifyDbError.
+    throw classifyDbError(err);
+  }
 
   return { pageCount: pages.length, chunkCount: drafts.length, embeddingTokens: embedded.tokens };
 }

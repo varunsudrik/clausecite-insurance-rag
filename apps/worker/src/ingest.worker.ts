@@ -62,6 +62,7 @@ export class IngestWorker implements OnApplicationBootstrap, OnApplicationShutdo
             db: this.database.db,
             embeddingModel: models.embedding,
             embeddingModelId: models.ids.embedding,
+            logger: this.logger,
             readFile: async (name) =>
               new Uint8Array(await readFile(resolve(this.env.STORAGE_DIR, name))),
           },
