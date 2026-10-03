@@ -14,22 +14,31 @@ const hasContent = (m: ClauseCiteUIMessage | undefined) =>
   m?.role === 'assistant' &&
   m.parts.some((p) => (p.type === 'text' && p.text !== '') || p.type === 'data-meta');
 
-export function ChatView({ onSelectSource }: { onSelectSource?: (s: SourceRef) => void }) {
+export function ChatView({
+  onSelectSource,
+  onNewChat,
+}: {
+  /** Called with the cited source when a citation chip (or a suggestion) is clicked. */
+  onSelectSource?: (s: SourceRef) => void;
+  /** Called when the transcript is cleared, so the page can close what it opened for the old chat. */
+  onNewChat?: () => void;
+}) {
   const [documents, setDocuments] = useState<PublicDocument[]>([]);
   const [scope, setScope] = useState<string[] | undefined>();
   const [input, setInput] = useState('');
-  const [selected, setSelected] = useState<SourceRef | null>(null);
   // Read by the transport at send time, so the scope and conversation always reflect the latest UI state.
   const state = useRef<ChatRequestState>({});
   const inputRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   /** The last question sent, so a failed send can put it back in the input. */
   const lastQuestion = useRef('');
-  // Latest parent callback, read at click time so `cite` keeps one identity (AssistantMessage is memoized).
+  // Latest parent callbacks, read at call time so `cite` keeps one identity (AssistantMessage is memoized).
   const selectSource = useRef(onSelectSource);
+  const newChatHandler = useRef(onNewChat);
   useEffect(() => {
     selectSource.current = onSelectSource;
-  }, [onSelectSource]);
+    newChatHandler.current = onNewChat;
+  }, [onSelectSource, onNewChat]);
 
   const transport = useMemo(() => createChatTransport(() => state.current), []);
   const { messages, sendMessage, status, error, stop, setMessages, clearError } =
@@ -79,10 +88,7 @@ export function ChatView({ onSelectSource }: { onSelectSource?: (s: SourceRef) =
     wasBusy.current = busy;
   }, [busy]);
 
-  const cite = useCallback((s: SourceRef) => {
-    if (selectSource.current) selectSource.current(s);
-    else setSelected(s);
-  }, []);
+  const cite = useCallback((s: SourceRef) => selectSource.current?.(s), []);
   const changeScope = (next: string[] | undefined) => {
     state.current.documentIds = next;
     setScope(next);
@@ -90,7 +96,7 @@ export function ChatView({ onSelectSource }: { onSelectSource?: (s: SourceRef) =
   const newChat = () => {
     if (busy) void stop();
     setMessages([]);
-    setSelected(null);
+    newChatHandler.current?.();
     state.current.conversationId = undefined;
     clearError();
   };
@@ -194,17 +200,6 @@ export function ChatView({ onSelectSource }: { onSelectSource?: (s: SourceRef) =
           </button>
         )}
       </form>
-
-      {!onSelectSource && selected && (
-        <aside className="rounded-md border p-3 text-sm dark:border-zinc-800">
-          <p className="font-medium">
-            {selected.documentTitle} — clause {selected.clauseId} (p. {selected.pageStart})
-          </p>
-          <p className="mt-2 whitespace-pre-wrap text-zinc-600 dark:text-zinc-400">
-            {selected.content}
-          </p>
-        </aside>
-      )}
     </div>
   );
 }

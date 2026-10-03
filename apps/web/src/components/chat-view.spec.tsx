@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { PublicDocument, SourceRef } from '@/lib/types';
@@ -150,16 +150,14 @@ describe('ChatView', () => {
     expect(new Headers(chatCall[1]?.headers).get('authorization')).toBe('Bearer tok');
   });
 
-  it('opens the cited clause text in the aside when a chip is clicked', async () => {
+  it('renders no citation panel of its own when a chip is clicked without a handler', async () => {
     const { user } = setup();
     render(<ChatView />);
     await ask(user, 'q');
     await user.click(await screen.findByRole('button', { name: /source 1/i }));
-    const aside = screen.getByRole('complementary');
-    expect(
-      within(aside).getByText(/Cataract surgery is covered after 24 months/),
-    ).toBeInTheDocument();
-    expect(within(aside).getByText(/clause C\.3/)).toBeInTheDocument();
+    // The page owns the citation panel; the chat only reports the selection.
+    expect(screen.queryByRole('complementary')).toBeNull();
+    expect(screen.queryByText(/Cataract surgery is covered after 24 months\./)).toBeNull();
   });
 
   it('hands the selected source to onSelectSource instead of rendering its own aside', async () => {
@@ -170,6 +168,14 @@ describe('ChatView', () => {
     await user.click(await screen.findByRole('button', { name: /source 1/i }));
     expect(onSelectSource).toHaveBeenCalledWith(expect.objectContaining({ clauseId: 'C.3' }));
     expect(screen.queryByRole('complementary')).toBeNull();
+  });
+
+  it('tells the page to close the citation panel on New chat', async () => {
+    const { user } = setup();
+    const onNewChat = vi.fn();
+    render(<ChatView onSelectSource={vi.fn()} onNewChat={onNewChat} />);
+    await user.click(screen.getByRole('button', { name: /new chat/i }));
+    expect(onNewChat).toHaveBeenCalledOnce();
   });
 
   it('turns a 429 into a limit message with the wait time', async () => {
