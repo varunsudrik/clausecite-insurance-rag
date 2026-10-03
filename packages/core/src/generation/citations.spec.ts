@@ -36,4 +36,42 @@ describe('validateCitations', () => {
   it('returns no citations for uncited text', () => {
     expect(validateCitations('No sources here.', SOURCES).citations).toEqual([]);
   });
+
+  it('dedupes numbers within one marker group', () => {
+    const r = validateCitations('Both [1, 1] and [2, 1, 2].', SOURCES);
+    expect(r.text).toBe('Both [1] and [2][1].');
+    expect(r.citations.map((c) => c.n)).toEqual([1, 2]);
+  });
+
+  it('removes the single preceding space together with a fully invalid marker', () => {
+    expect(validateCitations('Maybe [7].', SOURCES).text).toBe('Maybe.');
+    expect(validateCitations('Maybe [7], or not [0, 9]!', SOURCES).text).toBe('Maybe, or not!');
+    expect(validateCitations('Edge [9][1].', SOURCES).text).toBe('Edge [1].');
+    expect(validateCitations('Edge [9][8].', SOURCES).text).toBe('Edge.');
+  });
+
+  describe('cleanup is local to markers and never touches other whitespace', () => {
+    it('keeps nested-list indentation exactly, removing only the invalid marker', () => {
+      const r = validateCitations('- A [1]:\n  - B\n    - C [9]', SOURCES);
+      expect(r.text).toBe('- A [1]:\n  - B\n    - C');
+      expect(r.citations.map((c) => c.n)).toEqual([1]);
+    });
+
+    it('leaves a fenced code block with 4-space indentation untouched', () => {
+      const text = 'Example [2]:\n```\nfn main() {\n    let x  =  1 ;\n\tif x {  }\n}\n```';
+      expect(validateCitations(text, SOURCES).text).toBe(text);
+    });
+
+    it('leaves a markdown table alignment row untouched', () => {
+      const text = '| Plan   | Limit |\n| --- | :---: |\n| A      |  5 lakh [3] |';
+      expect(validateCitations(text, SOURCES).text).toBe(text);
+    });
+
+    it('does not strip the space before punctuation that is not a removed marker', () => {
+      expect(validateCitations('Note : x', SOURCES).text).toBe('Note : x');
+      expect(validateCitations('Note : x [1] ; y  z .', SOURCES).text).toBe(
+        'Note : x [1] ; y  z .',
+      );
+    });
+  });
 });
