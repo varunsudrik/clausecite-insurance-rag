@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { authEnv, llmEnv, loadEnv, rabbitEnv, redisEnv, retrievalEnv } from './env.js';
+import { authEnv, llmEnv, loadEnv, rabbitEnv, redisEnv, retrievalEnv, storageEnv } from './env.js';
 
 describe('loadEnv', () => {
   it('applies model defaults and splits fallback models', () => {
@@ -45,5 +45,35 @@ describe('loadEnv', () => {
 
   it('throws a readable error listing the missing variable', () => {
     expect(() => loadEnv(authEnv, {})).toThrow(/Invalid environment[\s\S]*JWT_SECRET/);
+  });
+
+  describe('JWT_SECRET', () => {
+    const PLACEHOLDER = 'change-me-to-a-random-string-of-at-least-32-chars';
+    const HINT = /openssl rand -base64 48/;
+
+    it('refuses the .env.example placeholder', () => {
+      expect(() => loadEnv(authEnv, { JWT_SECRET: PLACEHOLDER })).toThrow(HINT);
+    });
+
+    it('refuses any value containing "change-me", whatever the case or length', () => {
+      expect(() => loadEnv(authEnv, { JWT_SECRET: `${'a'.repeat(40)}change-me` })).toThrow(HINT);
+      expect(() => loadEnv(authEnv, { JWT_SECRET: `${'a'.repeat(40)}CHANGE-ME` })).toThrow(HINT);
+    });
+
+    it('still requires at least 32 characters', () => {
+      expect(() => loadEnv(authEnv, { JWT_SECRET: 'a'.repeat(31) })).toThrow(HINT);
+    });
+
+    it('accepts a random 48-character secret', () => {
+      const secret = 'Zk3v9QpXr2LmT7aYb5NcWd8HsJf4GuE1oIq6RtPyV0xBnMeAhCjK2lDw';
+      expect(loadEnv(authEnv, { JWT_SECRET: secret.slice(0, 48) }).JWT_SECRET).toHaveLength(48);
+    });
+  });
+});
+
+describe('storageEnv', () => {
+  it('requires STORAGE_DIR: a cwd-relative default would diverge between API and worker', () => {
+    expect(() => loadEnv(storageEnv, {})).toThrow(/Invalid environment[\s\S]*STORAGE_DIR/);
+    expect(loadEnv(storageEnv, { STORAGE_DIR: '/data/pdfs' }).STORAGE_DIR).toBe('/data/pdfs');
   });
 });

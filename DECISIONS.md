@@ -27,6 +27,7 @@ Short records of choices that refine or deviate from the design spec, with the r
 
 **Decision:** `documents.file_path` stores `<sha256>.pdf`; each app resolves it against its own `STORAGE_DIR`.
 **Why:** API and worker run with different working directories locally and share a volume in Docker.
+**Consequence:** `STORAGE_DIR` is required in both apps (no default): a cwd-relative fallback would silently resolve to different directories for the API and the worker.
 
 ## 006 — Lock the document row during chunk replace
 
@@ -49,3 +50,27 @@ Short records of choices that refine or deviate from the design spec, with the r
 **Decision:** cache query embeddings in a dedicated `redis-cache` instance (`--maxmemory 256mb --maxmemory-policy allkeys-lru`, no persistence), configured via `CACHE_REDIS_URL` (falls back to `REDIS_URL` when unset); entries are base64 float32 vectors (about 8 KB), written fire-and-forget with a 1 s command timeout.
 **Why:** cache keys come from user queries and live for 7 days, so enough unique queries could exhaust the Redis that also holds the fail-closed rate limits and token budgets; turning on `allkeys-lru` on that shared instance would instead let eviction drop budget and limit keys.
 **Consequence:** one more container; the production compose file (Phase 1B) must mirror it. A cache outage only costs a re-embed.
+
+## 010 — Chat request carries one message; the server owns history
+
+**Context:** spec §5 listed `messages` (the whole transcript) in the `/chat` request.
+**Decision:** the API takes `{ conversationId?, message, documentIds?, mode }` and reloads the history from Postgres (sanitized: citation markers stripped, roles alternating). The web client will send only the new message through the AI SDK transport's `prepareSendMessagesRequest`.
+**Why:** the client cannot inject or rewrite history, and citations are validated against sources the server itself retrieved.
+**Consequence:** Phase 1B web work must configure `prepareSendMessagesRequest` (send the last user message plus `conversationId`); the stream's final `data-meta` carries the validated `answer` and a refusal's `suggestions` so the UI does not depend on the raw deltas.
+
+## 011 — API currently crash-only on broker loss (to change in Phase 1B)
+
+**Context:** the API reuses `connectRabbit`'s crash-only `onClose` (decision 004), but unlike the worker it needs the broker only for uploads and re-ingest.
+**Problem:** a broker restart kills in-flight chat streams, and the API crash-loops for as long as the broker is down, taking `/chat` and `/search` with it.
+**Planned (Phase 1B):** log the close instead of exiting, report `rabbitmq: false` on `/health`, reconnect lazily on publish and answer `503` if that fails.
+
+## 012 — Spend protection is a Phase 1B deploy gate
+
+**Context:** per-user daily token budgets and per-user/per-IP rate limits exist (fail closed on Redis errors), but nothing bounds the total spend of the deployment.
+**Gate:** before the public demo, add
+
+- a global daily token/cost cap in Redis (fail closed);
+- IPv6 `/64` bucketing for the per-IP limits;
+- nominal budget charges for search and refusals (search records no usage and a refusal only costs its rewrite tokens, so both are free to spam up to the rate limit);
+- an env-driven `trust proxy` setting (it is hard-coded to `1` today, which is only right behind exactly one proxy);
+- a credit limit on the OpenRouter key itself.

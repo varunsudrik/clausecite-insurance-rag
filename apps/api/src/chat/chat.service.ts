@@ -10,6 +10,7 @@ import {
   formatSources,
   messages,
   rewriteQuestion,
+  sanitizeHistory,
   SYSTEM_PROMPT,
   toSourceRefs,
   validateCitations,
@@ -89,10 +90,14 @@ export class ChatService {
       .where(eq(messages.conversationId, conversation.id))
       .orderBy(desc(messages.createdAt))
       .limit(6);
-    const history = previous
-      .reverse()
-      .filter((m) => m.status !== 'error')
-      .map((m) => ({ role: m.role, content: m.content }));
+    // Used for both the question rewrite and the answer call: markers from earlier answers are stripped so
+    // they cannot be mistaken for this request's sources, and roles are made to alternate.
+    const history = sanitizeHistory(
+      previous
+        .reverse()
+        .filter((m) => m.status !== 'error')
+        .map((m) => ({ role: m.role, content: m.content })),
+    );
     await db
       .insert(messages)
       .values({ conversationId: conversation.id, role: 'user', content: body.message });
@@ -149,11 +154,12 @@ export class ChatService {
             data: { conversationId: chat.conversationId, question: rw.question, sources },
           });
 
-          const meta = (over: Partial<ChatMeta>): ChatMeta => ({
+          const meta = (over: Pick<ChatMeta, 'answer'> & Partial<ChatMeta>): ChatMeta => ({
             messageId,
             conversationId: chat.conversationId,
             status: 'complete',
             citations: [],
+            suggestions: [],
             uncited: false,
             usage: null,
             latencyMs: latency,
@@ -174,7 +180,14 @@ export class ChatService {
               retrievedChunkIds: retrieval.suggestions.map((s) => s.chunkId),
             });
             await this.limits.recordUsage(user, tokens);
-            writer.write({ type: 'data-meta', data: meta({ status: 'refused' }) });
+            writer.write({
+              type: 'data-meta',
+              data: meta({
+                answer: text,
+                status: 'refused',
+                suggestions: toSourceRefs(retrieval.suggestions),
+              }),
+            });
             writer.write({ type: 'finish' });
             return;
           }
@@ -245,6 +258,7 @@ export class ChatService {
           writer.write({
             type: 'data-meta',
             data: meta({
+              answer: validated.text,
               citations: validated.citations,
               uncited: validated.citations.length === 0,
               usage: msgUsage,

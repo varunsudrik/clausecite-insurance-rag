@@ -112,6 +112,12 @@ describe('POST /chat', () => {
 
     const [stored] = await h.db.select().from(messages).where(eq(messages.id, meta.messageId));
     expect(stored.content).not.toContain('[9]');
+    // The streamed deltas are raw (they still carry the invalid [9]); meta.answer is what was stored.
+    expect(text).toContain('[9]');
+    expect(meta.answer).toBe(stored.content);
+    expect(meta.answer).toContain('24 months of continuous coverage [1]');
+    expect(meta.answer).not.toContain('[9]');
+    expect(meta.suggestions).toEqual([]);
     expect(stored).toMatchObject({ role: 'assistant', status: 'complete', mode: 'quick' });
     expect(stored.usage).toMatchObject({ model: 'mock-chat' });
     expect(stored.latencyMs?.total).toBeGreaterThan(0);
@@ -126,14 +132,49 @@ describe('POST /chat', () => {
     expect(rewrite.doGenerateCalls).toHaveLength(1);
     const prompt = JSON.stringify(rewrite.doGenerateCalls[0].prompt);
     expect(prompt).toContain('waiting period for cataract');
+    // The rewrite transcript replays the prior answer without its stale [n] markers too.
+    expect(prompt).toContain('24 months of continuous coverage');
+    expect(prompt).not.toMatch(/continuous coverage\.? ?\[1\]/);
+  });
+
+  it('replays the prior answer to the chat model without its stale [n] markers', () => {
+    // chat.doStreamCalls[0] was the first question, [1] the follow-up.
+    const prompt = chat.doStreamCalls[1].prompt as { role: string; content: unknown }[];
+    expect(prompt.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user']);
+    const replayed = JSON.stringify(prompt[2].content);
+    expect(replayed).toContain('Cataract is covered only after 24 months of continuous coverage');
+    expect(replayed).not.toMatch(/\[\d/);
+    // The new turn still carries this request's own numbered sources.
+    expect(JSON.stringify(prompt[3].content)).toContain('<source id=\\"1\\"');
   });
 
   it('refuses without calling the chat model when nothing is relevant', async () => {
     const before = chat.doStreamCalls.length;
     const { chunks, text } = await postChat({ message: 'helicopter evacuation abroad?' }, guestA);
-    expect(chunks.find((c) => c.type === 'data-meta')!.data.status).toBe('refused');
+    const meta = chunks.find((c) => c.type === 'data-meta')!.data;
+    expect(meta.status).toBe('refused');
     expect(text).toMatch(/could not find/i);
     expect(chat.doStreamCalls.length).toBe(before);
+
+    // meta carries the refusal text that was stored and the closest clauses as structured refs.
+    const [stored] = await h.db.select().from(messages).where(eq(messages.id, meta.messageId));
+    expect(stored.status).toBe('refused');
+    expect(meta.answer).toBe(text);
+    expect(meta.answer).toBe(stored.content);
+    expect(meta.citations).toEqual([]);
+    expect(meta.suggestions.length).toBeGreaterThan(0);
+    for (const s of meta.suggestions) {
+      expect(s.clauseId).toEqual(expect.any(String));
+      expect(s.clauseId).not.toBe('');
+      expect(s).toMatchObject({
+        chunkId: expect.any(String),
+        documentTitle: 'Sample Health Shield',
+      });
+      expect(meta.answer).toContain(`clause ${s.clauseId}`);
+    }
+    expect(stored.retrievedChunkIds).toEqual(
+      meta.suggestions.map((s: { chunkId: string }) => s.chunkId),
+    );
   });
 
   it('emits an error chunk and stores status=error when generation fails', async () => {

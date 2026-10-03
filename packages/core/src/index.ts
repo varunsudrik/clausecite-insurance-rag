@@ -21,4 +21,5 @@ export * from './retrieval/clauses.js';
 export * from './generation/prompts.js';
 export * from './generation/citations.js';
 export * from './generation/rewrite.js';
+export * from './generation/history.js';
 export * from './types/chat.js';

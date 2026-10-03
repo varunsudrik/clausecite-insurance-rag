@@ -22,7 +22,14 @@ export interface ChatMeta {
   messageId: string;
   conversationId: string;
   status: 'complete' | 'refused' | 'error';
+  /**
+   * The text that was stored: the model's answer after citation validation (invalid `[n]` markers removed),
+   * or the refusal text. The streamed deltas are raw, so the client replaces them with this on `data-meta`.
+   */
+  answer: string;
   citations: Citation[];
+  /** A refusal's closest clauses (the same ones listed in its text); empty for every other status. */
+  suggestions: SourceRef[];
   uncited: boolean;
   usage: MessageUsage | null;
   latencyMs: MessageLatency;

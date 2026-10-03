@@ -36,15 +36,23 @@ export const redisEnv = z.object({
   CACHE_REDIS_URL: z.string().optional(),
 });
 
+const JWT_SECRET_HINT =
+  'JWT_SECRET must be a random secret of ≥ 32 chars; generate one with: openssl rand -base64 48';
+
 export const authEnv = z.object({
-  JWT_SECRET: z.string().min(32),
+  // The .env.example placeholder (and anything like it) would let anyone mint valid tokens.
+  JWT_SECRET: z
+    .string()
+    .min(32, JWT_SECRET_HINT)
+    .refine((s) => !s.toLowerCase().includes('change-me'), JWT_SECRET_HINT),
   ADMIN_EMAIL: z.string().optional(),
   ADMIN_PASSWORD: z.string().optional(),
   API_KEY: z.string().optional(),
   GUEST_DAILY_TOKEN_BUDGET: z.coerce.number().int().positive().default(50_000),
 });
 
-export const storageEnv = z.object({ STORAGE_DIR: z.string().default('./data/pdfs') });
+// No default: a cwd-relative fallback would resolve to different directories for the API and the worker.
+export const storageEnv = z.object({ STORAGE_DIR: z.string().min(1) });
 
 export const retrievalEnv = z.object({
   RERANK_THRESHOLD: z.coerce.number().min(0).max(1).default(0.2),
