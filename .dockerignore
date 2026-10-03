@@ -1,0 +1,24 @@
+# Build context for the production images: sources and lockfiles only.
+# Dependencies, build output and secrets are never sent to the daemon or baked into a layer.
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+**/*.tsbuildinfo
+
+# Secrets: any local env file, but not the committed template
+.env*
+!.env.prod.example
+
+# Runtime data and local artefacts
+data/pdfs
+backups
+.git
+.superpowers
+docs
+.DS_Store
+
+# Tests are not shipped
+**/*.spec.ts
+**/*.spec.tsx
+**/test

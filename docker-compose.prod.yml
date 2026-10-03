@@ -1,0 +1,220 @@
+# Production stack: Caddy (TLS) → web + api, with postgres, rabbitmq and two redis instances behind them.
+# Only Caddy publishes host ports (80/443); everything else lives on the private compose network.
+#
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod pull
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+#
+# `--env-file` feeds the ${...} interpolation below; `env_file:` hands the same variables to the
+# api and worker containers. ENV_FILE only needs setting if the file is not called .env.prod.
+name: clausecite-prod
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '3'
+
+x-service: &service
+  restart: unless-stopped
+  init: true
+  logging: *logging
+
+# Connection settings shared by api, worker and migrate. Passwords must be URL-safe (see .env.prod.example).
+x-backend-env: &backend-env
+  DATABASE_URL: postgres://clausecite:${POSTGRES_PASSWORD}@postgres:5432/clausecite
+  RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672?heartbeat=15
+  REDIS_URL: redis://redis:6379
+  CACHE_REDIS_URL: redis://redis-cache:6379
+  STORAGE_DIR: /data/pdfs
+  TRUST_PROXY_HOPS: '1'
+  WEB_ORIGIN: https://${DOMAIN}
+  PORT: '3001'
+
+services:
+  postgres:
+    <<: *service
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: clausecite
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.prod}
+      POSTGRES_DB: clausecite
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # -h forces TCP: the unix socket also answers on the temporary server the image runs during first-time init.
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U clausecite -d clausecite']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    <<: *service
+    image: rabbitmq:3.13-management-alpine
+    # The node name (and so the data directory inside the volume) derives from the hostname.
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?set RABBITMQ_USER in .env.prod}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD in .env.prod}
+    volumes:
+      - rabbitdata:/var/lib/rabbitmq
+    healthcheck:
+      # check_running, not ping: ping answers as soon as the Erlang node is up, before the AMQP listener is.
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'check_running']
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # Durable Redis: rate-limit and token-budget counters (fail closed, so they must survive restarts).
+  redis:
+    <<: *service
+    image: redis:7-alpine
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Disposable query-embedding cache (DECISIONS 009): bounded and evicting, never persisted,
+  # so it can never starve `redis`.
+  redis-cache:
+    <<: *service
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ''
+      - --appendonly
+      - 'no'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    image: ghcr.io/${GHCR_OWNER:?set GHCR_OWNER in .env.prod}/clausecite-api:${IMAGE_TAG:-latest}
+    init: true
+    restart: 'no'
+    command: ['node', 'node_modules/@clausecite/core/dist/db/migrate.js']
+    environment:
+      DATABASE_URL: postgres://clausecite:${POSTGRES_PASSWORD}@postgres:5432/clausecite
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *service
+    image: ghcr.io/${GHCR_OWNER:?set GHCR_OWNER in .env.prod}/clausecite-api:${IMAGE_TAG:-latest}
+    env_file: ${ENV_FILE:-.env.prod}
+    environment: *backend-env
+    volumes:
+      - pdfs:/data/pdfs
+    # Longer than the 60 s chat stream, so a redeploy lets in-flight answers finish.
+    stop_grace_period: 75s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      # The API boots and serves chat/search without the broker (DECISIONS 011).
+      rabbitmq:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  # Crash-only (DECISIONS 004): it exits on broker loss and `restart: unless-stopped` brings it back.
+  worker:
+    <<: *service
+    image: ghcr.io/${GHCR_OWNER:?set GHCR_OWNER in .env.prod}/clausecite-worker:${IMAGE_TAG:-latest}
+    env_file: ${ENV_FILE:-.env.prod}
+    environment: *backend-env
+    volumes:
+      - pdfs:/data/pdfs
+    # Longer than the 30 s drain, so a redeploy lets the running ingest finish.
+    stop_grace_period: 40s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # No env_file: the web container never sees a server secret.
+  web:
+    <<: *service
+    image: ghcr.io/${GHCR_OWNER:?set GHCR_OWNER in .env.prod}/clausecite-web:${IMAGE_TAG:-latest}
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  caddy:
+    <<: *service
+    image: caddy:2-alpine
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env.prod}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+
+  # A daily pg_dump kept for 7 days. BACKUP_DIR defaults to ./backups next to this file.
+  backup:
+    <<: *service
+    image: pgvector/pgvector:pg17
+    environment:
+      DATABASE_URL: postgres://clausecite:${POSTGRES_PASSWORD}@postgres:5432/clausecite
+    # `$$` keeps compose from interpolating; the shell inside the container expands it.
+    command:
+      - sh
+      - -c
+      - 'while true; do pg_dump -Fc "$$DATABASE_URL" > /backups/clausecite-$$(date +%F).dump && find /backups -name "*.dump" -mtime +7 -delete; sleep 86400; done'
+    volumes:
+      - ${BACKUP_DIR:-./backups}:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  rabbitdata:
+  redisdata:
+  pdfs:
+  caddy_data:
+  caddy_config:
