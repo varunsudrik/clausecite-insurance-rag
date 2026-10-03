@@ -43,6 +43,9 @@ describe('schema', () => {
     const [row] = await t.db.select().from(chunks).where(eq(chunks.documentId, doc.id));
     expect(row.embedding).toHaveLength(EMBEDDING_DIMENSIONS);
     expect(row.tsv).toContain('cataract');
+    // 'exclus' only occurs in the content_for_embedding header ("Exclusions"), so this proves
+    // the generated column is built from content_for_embedding with the english stemmer.
+    expect(row.tsv).toContain('exclus');
   });
 
   it('creates the hnsw and gin indexes', async () => {
@@ -51,6 +54,20 @@ describe('schema', () => {
     );
     const defs = res.rows.map((r) => r.indexdef).join('\n');
     expect(defs).toMatch(/USING hnsw \(embedding vector_cosine_ops\)/);
+    expect(defs).toMatch(/\bm='?16'?/);
+    expect(defs).toMatch(/\bef_construction='?64'?/);
     expect(defs).toMatch(/USING gin \(tsv\)/);
+  });
+
+  it('sets hnsw.iterative_scan at connection startup', async () => {
+    const client = await t.pool.connect();
+    try {
+      // Touch the vector type first so the pgvector library is loaded in this session.
+      await client.query(`select '[1,2,3]'::vector`);
+      const res = await client.query<{ 'hnsw.iterative_scan': string }>('show hnsw.iterative_scan');
+      expect(res.rows[0]?.['hnsw.iterative_scan']).toBe('relaxed_order');
+    } finally {
+      client.release();
+    }
   });
 });
