@@ -6,9 +6,10 @@ import { DocumentsModule } from './documents/documents.module.js';
 import { HealthController } from './health/health.controller.js';
 import { InfraModule } from './infra/infra.module.js';
 import { LimitsModule } from './limits/limits.module.js';
+import { SearchModule } from './search/search.module.js';
 
 @Module({
-  imports: [InfraModule, LimitsModule, AuthModule, DocumentsModule],
+  imports: [InfraModule, LimitsModule, AuthModule, DocumentsModule, SearchModule],
   controllers: [HealthController],
   providers: [{ provide: APP_FILTER, useClass: TooManyRequestsFilter }],
 })
